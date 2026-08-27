@@ -11,9 +11,11 @@
 # Pass --dev to target docker-compose.dev.yml instead, which DOES rebuild
 # locally (use this if you're also testing Dockerfile/entrypoint changes).
 #
-# Version is normally auto-detected from the filename (handles suffixes like
-# "v1_6_4-1" -> "v1.6.4-1"), but you can always override it explicitly:
-#   ./update.sh acevo-server-manager_v1_6_4-1.zip v1.6.4-1
+# Version is normally auto-detected from the filename - handles both the
+# dot-separated names Emperor Servers actually ships ("v1.6.4-1.zip") and
+# underscore-separated ones ("v1_6_4-1.zip") - but you can always override
+# it explicitly:
+#   ./update.sh acevo-server-manager_v1.6.4-1.zip v1.6.4-1
 #
 # Can be run from anywhere (cds to the repo root automatically).
 set -euo pipefail
@@ -51,10 +53,11 @@ if [ -n "$VERSION_OVERRIDE" ]; then
     VERSION="$VERSION_OVERRIDE"
 else
     # Derive a version string from the zip filename, e.g.
-    # acevo-server-manager_v1_6_4.zip     -> v1.6.4
-    # acevo-server-manager_v1_6_4-1.zip   -> v1.6.4-1   (hotfix/build suffix)
+    # acevo-server-manager_v1.6.4.zip     -> v1.6.4
+    # acevo-server-manager_v1.6.4-1.zip   -> v1.6.4-1   (hotfix/build suffix)
+    # (underscore-separated names like "v1_6_4.zip" also work)
     BASENAME=$(basename "$ZIP_PATH" .zip)
-    RAW=$(echo "$BASENAME" | grep -oP '(?<=_v)[0-9]+(_[0-9]+)*(-[0-9A-Za-z]+)*' || true)
+    RAW=$(echo "$BASENAME" | grep -oP '(?<=_v)[0-9]+(?:[._][0-9]+)*(-[0-9A-Za-z]+)*' || true)
 
     if [ -z "$RAW" ]; then
         VERSION=""

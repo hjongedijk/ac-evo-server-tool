@@ -13,3 +13,5 @@ releases/*/linux/config.yml
 releases/*/*.exe
 releases/*/windows/
 releases/*/*.zip
+
+.claude

@@ -40,8 +40,9 @@ services:
       - ./data/ACEVO.License:/acevo/ACEVO.License
       # Game server files (downloaded via steamcmd or copied in manually)
       - ./data/server:/acevo/server
-      # Manager's own JSON store DIRECTORY (per config.yml's `store.path`).
-      # Despite the default name "store.json", the manager treats this as a
-      # directory it manages internally (not a single JSON file) - so we
-      # mount a real directory here, not a file.
-      - ./data/store:/acevo/store
+      # Manager's own store DIRECTORY (per config.yml's `store.path`, default
+      # "store.json"). Despite the name, the manager treats this as a
+      # directory it manages internally (not a single JSON file) - mounting
+      # a real directory here at the same "store.json" path keeps the
+      # release's default config.yml usable unmodified.
+      - ./data/store.json:/acevo/store.json

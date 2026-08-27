@@ -77,6 +77,14 @@ COPY bin/entrypoint.sh /entrypoint.sh
 # fails with "exec /entrypoint.sh: no such file or directory".
 RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 
+# update.sh is a HOST-side script (it drives `docker compose` and edits the
+# host's .env - it does not run inside this container). It's copied in here
+# purely so it can always be pulled back out of whatever image you're
+# running, without needing the source repo/zip on hand:
+#   docker compose cp acevo-server-manager:/opt/update.sh ./update.sh
+COPY update.sh /opt/update.sh
+RUN sed -i 's/\r$//' /opt/update.sh && chmod +x /opt/update.sh
+
 # NOTE: you must supply your own ACEVO.License file at runtime by mounting it
 # into the container at /acevo/ACEVO.License (see docker-compose.yml).
 

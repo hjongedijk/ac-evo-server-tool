@@ -9,8 +9,9 @@ downloads the game server via steamcmd, and successfully runs a race server.
 ## Two ways to run this
 
 - **`docker-compose.yml`** (recommended for normal use) — pulls the
-  pre-built base image from GHCR (`ghcr.io/OWNER/REPO`). No local build
-  needed. Switching manager versions is just a `.env` change + restart.
+  pre-built base image from GHCR (`ghcr.io/hjongedijk/ac-evo-server-tool`).
+  No local build needed. Switching manager versions is just a `.env`
+  change + restart.
 - **`docker-compose.dev.yml`** — builds the image locally from `bin/Dockerfile`.
   Use this only if you're changing the Dockerfile/entrypoint itself and want
   to test before pushing a tooling release.
@@ -38,6 +39,7 @@ acsm-evo/
 ├── TOOLING_VERSION               <- current tooling version, updated by release.sh
 ├── README.md
 ├── README-docker.md
+├── install.sh                    <- run this first, for first-time setup scaffolding
 ├── update.sh                     <- run this to install a new manager release
 ├── release.sh                    <- run this to cut a new tooling release
 ├── bin/
@@ -46,7 +48,7 @@ acsm-evo/
 │   └── debug-steamcmd.sh
 ├── releases/
 │   └── v1.6.3/
-│       ├── acevo-server-manager_v1_6_3.zip   <- OPTION A: raw zip, auto-extracted
+│       ├── acevo-server-manager_v1.6.3.zip   <- OPTION A: raw zip, auto-extracted
 │       └── linux/                             <- OPTION B: pre-extracted (takes priority if present)
 │           ├── acevo-server-manager
 │           └── config.yml
@@ -54,17 +56,45 @@ acsm-evo/
     ├── config.yml
     ├── ACEVO.License
     ├── server/
-    └── store/
+    └── store.json/                  <- directory, not a file (see step 5)
 ```
 
 ## First-time setup
 
-**1. Set the image name.** Edit `docker-compose.yml` and replace
-`ghcr.io/OWNER/REPO` with your actual GitHub username/org and repo name
-(only needed if you're using the prod compose file — skip if using
-`docker-compose.dev.yml`).
+### Fastest path: `install.sh`
 
-**2. Set up your `.env`:**
+You only need to provide three files: the installer itself, your manager
+release zip, and your license. Everything else is fetched from this repo:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/hjongedijk/ac-evo-server-tool/main/install.sh
+chmod +x install.sh
+# now put acevo-server-manager_vX.Y.Z.zip and ACEVO.License next to install.sh
+./install.sh
+```
+
+It fetches `docker-compose.yml`, `.env.example`, and `update.sh` from
+GitHub; creates the `data/`/`releases/` directories; moves your license and
+release zip into place (`data/ACEVO.License` and `releases/<version>/`);
+seeds `data/config.yml` from the zip; and creates `.env` with
+`ACEVO_VERSION` already set to match. It never overwrites a file that's
+already there, so it's safe to re-run (e.g. after dropping in a new release
+zip, to pick it up without touching anything you've customized).
+
+After it runs, there are still a few manual steps — none of them
+automatable, since they're either secrets or account-gated downloads:
+- Review `data/config.yml`: set `http.session_key` to a random secret.
+- Fill in `.env`: `TZ`, and `STEAM_USER`/`STEAM_PASS` only if anonymous
+  steamcmd login doesn't work (see step 5 below for details).
+- Game server ports (see step 6 below) if you're not using the defaults.
+- `docker compose up -d`
+
+### Doing it manually (full repo checkout)
+
+If you'd rather clone the repo (e.g. to use `docker-compose.dev.yml`, or to
+patch something), here's what `install.sh` automates, spelled out:
+
+**1. Set up your `.env`:**
 ```bash
 cp .env.example .env
 ```
@@ -75,14 +105,14 @@ files, *and* loaded into the running container via `env_file` (so
 here too). It's gitignored since it can hold Steam credentials — only
 `.env.example` is tracked.
 
-**3. Get your license file** from the emperorservers.com Control Panel (the
+**2. Get your license file** from the emperorservers.com Control Panel (the
 "key" button next to "download"). Place it at `data/ACEVO.License`.
 
-**4. Put the manager release in place** — download the zip from your Emperor
+**3. Put the manager release in place** — download the zip from your Emperor
 Servers control panel and just drop it, untouched, into `releases/v1.6.3/`:
 ```bash
 mkdir -p releases/v1.6.3
-cp ~/Downloads/acevo-server-manager_v1_6_3.zip releases/v1.6.3/
+cp ~/Downloads/acevo-server-manager_v1.6.3.zip releases/v1.6.3/
 ```
 That's it — no extraction needed. The container extracts it automatically on
 every start (cheap, sub-second). It never gets committed to git or baked
@@ -95,20 +125,22 @@ files from inside the zip's `linux/` folder at
 `releases/v1.6.3/linux/config.yml`. A pre-extracted `linux/` folder always
 takes priority over a zip if both are present.
 
-**5. Seed the initial config** (only needed once — after this, `data/config.yml`
+**4. Seed the initial config** (only needed once — after this, `data/config.yml`
 is yours and survives upgrades):
 ```bash
-mkdir -p data/server data/store
-unzip -p releases/v1.6.3/acevo-server-manager_v1_6_3.zip linux/config.yml > data/config.yml
+mkdir -p data/server data/store.json
+unzip -p releases/v1.6.3/acevo-server-manager_v1.6.3.zip linux/config.yml > data/config.yml
 touch data/ACEVO.License   # then paste your real license content in
 ```
 At minimum, check in `data/config.yml`:
 - `http.hostname` — leave as `0.0.0.0:8773` so it's reachable from outside the container
 - `http.session_key` — change to a random secret
-- `store.path` — should be `store` (a directory, not `store.json` — the
-  manager treats this path as a directory it manages internally)
+- `store.path` — leave as the default `store.json`. Despite the name it's a
+  directory, not a file — the manager manages it internally — and the
+  compose files mount `data/store.json/` at exactly that path so the
+  default value works unmodified.
 
-**6. Game server files** — the AC EVO dedicated server itself isn't bundled;
+**5. Game server files** — the AC EVO dedicated server itself isn't bundled;
 it's fetched via steamcmd on container start. Already wired up via `.env`
 (`ACEVO_AUTO_UPDATE=1`, `ACEVO_STEAM_APPID=4564210` — confirmed correct App
 ID for the AC EVO dedicated server tool). Anonymous login works fine for
@@ -117,7 +149,7 @@ account, fill in `STEAM_USER`/`STEAM_PASS` in `.env`; Steam Guard/2FA
 accounts need one interactive run first:
 `docker compose run --rm acevo-server-manager`.
 
-**7. Game server ports** — the manager assigns these per-server via its own
+**6. Game server ports** — the manager assigns these per-server via its own
 web UI ("Server Options" page), not `config.yml`. Whatever port it shows
 there must match the compose file's `ports:` section — the first server
 defaulted to `9800` (TCP+UDP) and `9801` (TCP). If you change the port in the
@@ -145,7 +177,15 @@ immediately.
 When Emperor Servers ships a new version:
 
 ```bash
-./update.sh /path/to/acevo-server-manager_v1_6_4.zip
+./update.sh /path/to/acevo-server-manager_v1.6.4.zip
+```
+
+Don't have `update.sh` on hand (e.g. you only have `docker-compose.yml` and
+`.env`, not the full repo/zip)? It's also baked into the published image —
+pull it back out:
+```bash
+docker compose cp acevo-server-manager:/opt/update.sh ./update.sh
+chmod +x update.sh
 ```
 
 This works from anywhere — it locates the repo root automatically, copies
@@ -157,14 +197,14 @@ server, database) is never touched.
 
 Use `--dev` if you're running the local-build compose file instead:
 ```bash
-./update.sh /path/to/acevo-server-manager_v1_6_4.zip --dev
+./update.sh /path/to/acevo-server-manager_v1.6.4.zip --dev
 ```
 
 Version numbers with a hotfix/build suffix (e.g. `v1.6.4-1`) are handled
 automatically. If a filename doesn't parse cleanly, pass the version
 explicitly:
 ```bash
-./update.sh acevo-server-manager_v1_6_4-1.zip v1.6.4-1
+./update.sh acevo-server-manager_v1.6.4-1.zip v1.6.4-1
 ```
 
 The entrypoint also does a light check on every start: if the new release's
@@ -183,7 +223,7 @@ docker compose up -d
 
 ```bash
 mkdir -p releases/v1.6.4
-cp acevo-server-manager_v1_6_4.zip releases/v1.6.4/
+cp acevo-server-manager_v1.6.4.zip releases/v1.6.4/
 sed -i 's/^ACEVO_VERSION=.*/ACEVO_VERSION=v1.6.4/' .env
 docker compose up -d
 ```

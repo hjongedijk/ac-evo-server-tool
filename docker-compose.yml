@@ -2,9 +2,8 @@ services:
   acevo-server-manager:
     # Published base image (Wine + steamcmd + entrypoint) - contains no
     # proprietary Emperor Servers code, so it's safe to build+publish
-    # publicly via GitHub Actions. Replace OWNER/REPO with your actual
-    # GitHub username/org and repo name once you've pushed this project.
-    image: ghcr.io/OWNER/REPO:${IMAGE_TAG:-latest}
+    # publicly via GitHub Actions.
+    image: ghcr.io/hjongedijk/ac-evo-server-tool:${IMAGE_TAG:-latest}
     container_name: acevo-server-manager
     restart: unless-stopped
     env_file:
@@ -40,8 +39,9 @@ services:
       - ./data/ACEVO.License:/acevo/ACEVO.License
       # Game server files (downloaded via steamcmd or copied in manually)
       - ./data/server:/acevo/server
-      # Manager's own JSON store DIRECTORY (per config.yml's `store.path`).
-      # Despite the default name "store.json", the manager treats this as a
-      # directory it manages internally (not a single JSON file) - so we
-      # mount a real directory here, not a file.
-      - ./data/store:/acevo/store
+      # Manager's own store DIRECTORY (per config.yml's `store.path`, default
+      # "store.json"). Despite the name, the manager treats this as a
+      # directory it manages internally (not a single JSON file) - mounting
+      # a real directory here at the same "store.json" path keeps the
+      # release's default config.yml usable unmodified.
+      - ./data/store.json:/acevo/store.json

@@ -9,19 +9,25 @@ steamcmd, and successfully runs a race server.
 
 ## Quick start
 
+All you need to provide yourself is the installer and two files from your
+Emperor Servers control panel — `install.sh` fetches everything else
+(`docker-compose.yml`, `.env.example`, `update.sh`) from this repo:
+
 ```bash
-# 1. put your license file at data/ACEVO.License
-# 2. drop the release zip straight into releases/v1.6.3/ (no need to extract)
-#    - download from your Emperor Servers control panel
-# 3. seed the config
-mkdir -p data/server data/store
-unzip -p releases/v1.6.3/acevo-server-manager_v1_6_3.zip linux/config.yml > data/config.yml
+# 1. fetch the installer
+curl -fsSLO https://raw.githubusercontent.com/hjongedijk/ac-evo-server-tool/main/install.sh
+chmod +x install.sh
 
-# 4. copy the env template and fill in the values you need
-cp .env.example .env
+# 2. put these two files next to install.sh:
+#    - acevo-server-manager_vX.Y.Z.zip   (download from your control panel)
+#    - ACEVO.License                     (same control panel)
 
-# 5. edit docker-compose.yml, replace ghcr.io/OWNER/REPO with your repo
-# 6. run it
+# 3. run it - fetches the tooling files, scaffolds data/, moves the zip and
+#    license into place, seeds config.yml
+./install.sh
+
+# 4. review data/config.yml (set http.session_key) and .env (TZ, Steam
+#    creds), then run it
 docker compose up -d
 docker compose logs -f acevo-server-manager
 ```
@@ -47,7 +53,7 @@ runtime from your own `releases/<version>/` folder, either as a raw zip
 ## Updating
 
 ```bash
-./update.sh /path/to/acevo-server-manager_v1_6_4.zip
+./update.sh /path/to/acevo-server-manager_v1.6.4.zip
 ```
 
 No rebuild needed — see [README-docker.md](README-docker.md#updating-to-a-new-manager-release)
