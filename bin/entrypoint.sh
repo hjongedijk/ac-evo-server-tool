@@ -26,7 +26,10 @@ fi
 #   - an already-extracted linux/acevo-server-manager + linux/config.yml, OR
 #   - the untouched release zip straight from Emperor Servers (e.g.
 #     acevo-server-manager_v1_6_4.zip) - no manual unzipping needed, this
-#     script extracts it on every start into a writable scratch dir.
+#     script extracts it into a writable scratch dir (skipped if already
+#     extracted there and the zip hasn't changed since - VENDOR_WORK isn't a
+#     mounted volume, so it persists across restarts of the same container,
+#     just not across a full recreate).
 # Pre-extracted layout takes priority if both happen to be present.
 mkdir -p "${VENDOR_WORK}"
 
@@ -38,9 +41,18 @@ else
 
     if [ "${ZIP_COUNT}" -eq 1 ]; then
         ZIP_FILE=$(echo "${ZIP_MATCHES}" | head -n1)
-        echo "Found release archive $(basename "${ZIP_FILE}") - extracting..."
-        unzip -oq "${ZIP_FILE}" -d "${VENDOR_WORK}"
         BIN_SRC_DIR="${VENDOR_WORK}/linux"
+        if [ -f "${BIN_SRC_DIR}/acevo-server-manager" ] && [ "${BIN_SRC_DIR}/acevo-server-manager" -nt "${ZIP_FILE}" ]; then
+            echo "$(basename "${ZIP_FILE}") already extracted and up to date - skipping extraction."
+        else
+            echo "Found release archive $(basename "${ZIP_FILE}") - extracting..."
+            unzip -oq "${ZIP_FILE}" -d "${VENDOR_WORK}"
+            # unzip preserves the timestamps stored in the archive (whenever
+            # Emperor Servers built it), not the extraction time - touch the
+            # binary so the "-nt" staleness check above has something
+            # meaningful to compare against on the next start.
+            touch "${BIN_SRC_DIR}/acevo-server-manager"
+        fi
     elif [ "${ZIP_COUNT}" -gt 1 ]; then
         echo "ERROR: multiple .zip files found under releases/<version>/ - expected exactly one."
         echo "Files found:"
