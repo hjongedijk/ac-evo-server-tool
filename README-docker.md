@@ -88,15 +88,19 @@ you've customized).
 If you're at a real terminal the first time it creates `.env`, it also
 prompts you for:
 - **Timezone** (defaults to `UTC`).
-- **Steam login** for steamcmd — typically required (see below); only asks
-  for the password if you gave a username, and leaving it blank tries
-  anonymous login anyway.
-- **Number of game servers** you want to run. If you ask for more than one
-  and a release zip was found, it does the *entire* rest for you: starts
-  the container, waits for the manager's first boot to finish, registers
-  each extra server directly with the manager and publishes its ports (see
-  [Adding a server](#adding-a-server) below), then restarts once to pick
-  them all up — no web UI clicking required.
+- **Steam login** for steamcmd — required (see below); anonymous login
+  fails for this app, so both fields must be filled in.
+- **Number of game servers** you want to run.
+- **Name, max players, and optional driver/admin passwords for each
+  server** — asked in order (server 1, server 2, ...) before anything
+  starts, so the rest of setup can run unattended.
+
+If a release zip was found, it then does the *entire* rest for you: starts
+the container, waits for the manager's first boot to finish, applies your
+settings to server 1 and registers every additional server directly with
+the manager, publishes all their ports (see
+[Adding a server](#adding-a-server) below), then restarts once to pick it
+all up — no web UI clicking required.
 
 Running non-interactively (no terminal attached), or just pressed Enter
 past a prompt? Nothing is lost — everything it would have asked stays at
@@ -162,9 +166,9 @@ wired up via `.env`'s `ACEVO_AUTO_UPDATE=1`/`ACEVO_STEAM_APPID=4564210` —
 confirmed correct App ID for the AC EVO dedicated server tool; it only
 installs once, not on every restart — see
 [Updating game server files](#updating-game-server-files)). **Steam
-credentials are typically required** — anonymous login has been observed to
-fail for accounts that don't have the base game in their library, even
-though this is nominally a free dedicated-server tool. Fill in
+credentials are required** — anonymous login fails for this app. The
+account must own/have Assetto Corsa EVO in its library, even though you're
+only downloading the dedicated server tool. Fill in
 `STEAM_USER`/`STEAM_PASS` in `.env`; Steam Guard/2FA accounts need one
 interactive run first: `docker compose run --rm acevo-server-manager`.
 

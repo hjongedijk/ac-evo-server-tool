@@ -66,6 +66,11 @@ set_env_var() {
     echo "${name}=${value}" >> .env
 }
 
+# Escape \ and " so a value is safe to drop into a JSON string literal.
+json_escape() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
 generate_secret() {
     if command -v openssl >/dev/null 2>&1; then
         openssl rand -hex 32
@@ -185,7 +190,7 @@ cmd_add_server() {
     local port=$((9800 + next_idx * 2))
     local http=$((port + 1))
 
-    local name="${1:-}" players="16" driver_pass="" admin_pass=""
+    local name="${1:-}" players="${2:-16}" driver_pass="${3:-}" admin_pass="${4:-}"
     if [ -z "$name" ] && [ -t 0 ]; then
         echo ""
         echo "${C_BOLD}--- New server ---${C_RESET}"
@@ -206,9 +211,14 @@ cmd_add_server() {
 
     log "Adding ${new_id} (\"${name}\") on port ${port} (web: ${http})"
 
+    local name_esc driver_pass_esc admin_pass_esc
+    name_esc=$(json_escape "$name")
+    driver_pass_esc=$(json_escape "$driver_pass")
+    admin_pass_esc=$(json_escape "$admin_pass")
+
     mkdir -p "data/store.json/servers/${new_id}"
     cat > "data/store.json/servers/${new_id}/serverOptions.json" <<JSON
-{"ServerConfig":{"server_name":"${name}","server_tcp_listener_port":${port},"server_udp_listener_port":${port},"server_tcp_internal_port":${port},"server_udp_internal_port":${port},"server_http_port":${http},"max_players":${players},"cycle":false,"allowed_cars_list_full":null,"driver_password":"${driver_pass}","spectator_password":"","admin_password":"${admin_pass}","type":"MultiplayerServerListSessionType_RANKED","entry_list_path":"","results_path":"","tuning_type":""},"ServerFlags":{"NoLobby":false},"ServerManagerServerOptions":{"RestartCurrentEventOnServerCrash":true,"BlockListedSteamIDs":null}}
+{"ServerConfig":{"server_name":"${name_esc}","server_tcp_listener_port":${port},"server_udp_listener_port":${port},"server_tcp_internal_port":${port},"server_udp_internal_port":${port},"server_http_port":${http},"max_players":${players},"cycle":false,"allowed_cars_list_full":null,"driver_password":"${driver_pass_esc}","spectator_password":"","admin_password":"${admin_pass_esc}","type":"MultiplayerServerListSessionType_RANKED","entry_list_path":"","results_path":"","tuning_type":""},"ServerFlags":{"NoLobby":false},"ServerManagerServerOptions":{"RestartCurrentEventOnServerCrash":true,"BlockListedSteamIDs":null}}
 JSON
     cat > "data/store.json/servers/${new_id}/perServerOptions.json" <<'JSON'
 {"ServerName":{"UseServerNameTemplate":true,"ServerNameTemplate":"{{ .ServerName }} - {{ with .ChampionshipName }}{{ . }}{{ else }}{{ .EventName }}{{ end }}"},"ProcessManagement":{"ServerProcessPriority":3,"ServerProcessCPUAffinity":null}}
@@ -224,7 +234,7 @@ JSON
 
     cat > "data/server/_manager/servers/${new_id}/server_config.json" <<JSON
 {
-  "server_name": "${name}",
+  "server_name": "${name_esc}",
   "server_tcp_listener_port": ${port},
   "server_udp_listener_port": ${port},
   "server_tcp_internal_port": ${port},
@@ -233,9 +243,9 @@ JSON
   "max_players": ${players},
   "cycle": false,
   "allowed_cars_list_full": [],
-  "driver_password": "${driver_pass}",
+  "driver_password": "${driver_pass_esc}",
   "spectator_password": "",
-  "admin_password": "${admin_pass}",
+  "admin_password": "${admin_pass_esc}",
   "type": "MultiplayerServerListSessionType_RANKED",
   "entry_list_path": "/acevo/server/_manager/servers/${new_id}/entry_list.json",
   "results_path": "/acevo/server/_manager/servers/${new_id}/results/",
@@ -249,6 +259,85 @@ JSON
     success "${new_id} added. Restart to pick it up:"
     echo "  docker compose up -d"
     echo "Forward ${port} (TCP+UDP) and ${http} (TCP) at your router/firewall too."
+}
+
+# Set just an EXISTING server's display name (used by rename-server) -
+# leaves max players/passwords untouched, unlike set_server_config below.
+set_server_name() {
+    local id="$1" name="$2"
+    local name_r
+    name_r=$(json_escape "$name" | sed 's/[\&|]/\\&/g')
+    sed -i "s|\"server_name\":\"[^\"]*\"|\"server_name\":\"${name_r}\"|" \
+        "data/store.json/servers/${id}/serverOptions.json"
+    if [ -f "data/server/_manager/servers/${id}/server_config.json" ]; then
+        sed -i "s|\"server_name\": \"[^\"]*\"|\"server_name\": \"${name_r}\"|" \
+            "data/server/_manager/servers/${id}/server_config.json"
+    fi
+}
+
+# Set an EXISTING server's name/max players/passwords in both the manager's
+# store entry and its generated server_config.json (if that exists yet -
+# it's only written once an event has actually started on that server, see
+# add-server above). Each value is JSON-escaped (\ and ") then sed-escaped
+# (\, &, |) before being dropped into a sed replacement - in that order,
+# since JSON-escaping can introduce backslashes that also need sed-escaping.
+set_server_config() {
+    local id="$1" name="$2" players="${3:-16}" driver_pass="${4:-}" admin_pass="${5:-}"
+    local name_r driver_r admin_r
+    name_r=$(json_escape "$name" | sed 's/[\&|]/\\&/g')
+    driver_r=$(json_escape "$driver_pass" | sed 's/[\&|]/\\&/g')
+    admin_r=$(json_escape "$admin_pass" | sed 's/[\&|]/\\&/g')
+
+    local opts="data/store.json/servers/${id}/serverOptions.json"
+    sed -i \
+        -e "s|\"server_name\":\"[^\"]*\"|\"server_name\":\"${name_r}\"|" \
+        -e "s|\"max_players\":[0-9]*|\"max_players\":${players}|" \
+        -e "s|\"driver_password\":\"[^\"]*\"|\"driver_password\":\"${driver_r}\"|" \
+        -e "s|\"admin_password\":\"[^\"]*\"|\"admin_password\":\"${admin_r}\"|" \
+        "$opts"
+
+    local cfg="data/server/_manager/servers/${id}/server_config.json"
+    if [ -f "$cfg" ]; then
+        sed -i \
+            -e "s|\"server_name\": \"[^\"]*\"|\"server_name\": \"${name_r}\"|" \
+            -e "s|\"max_players\": [0-9]*|\"max_players\": ${players}|" \
+            -e "s|\"driver_password\": \"[^\"]*\"|\"driver_password\": \"${driver_r}\"|" \
+            -e "s|\"admin_password\": \"[^\"]*\"|\"admin_password\": \"${admin_r}\"|" \
+            "$cfg"
+    fi
+}
+
+# ============================================================================
+# rename-server - change an existing server's display name.
+# ============================================================================
+cmd_rename_server() {
+    require_setup_done
+
+    local id="${1:-}" name="${2:-}"
+    if [ -z "$id" ] && [ -t 0 ]; then
+        echo "${C_BOLD}Existing servers:${C_RESET}"
+        local d
+        for d in data/store.json/servers/server_*; do
+            [ -d "$d" ] || continue
+            echo "  $(basename "$d"): \"$(grep -oP '"server_name":"\K[^"]*' "$d/serverOptions.json" 2>/dev/null)\""
+        done
+        read -r -p "Server id to rename (e.g. server_0): " id
+    fi
+    if [ -z "$id" ] || [ ! -f "data/store.json/servers/${id}/serverOptions.json" ]; then
+        error "No such server: '${id}'"
+        exit 1
+    fi
+    if [ -z "$name" ] && [ -t 0 ]; then
+        read -r -p "New name: " name
+    fi
+    if [ -z "$name" ]; then
+        error "A name is required."
+        exit 1
+    fi
+
+    set_server_name "$id" "$name"
+    echo ""
+    success "${id} renamed to \"${name}\". Restart to apply: docker compose up -d"
 }
 
 # ============================================================================
@@ -307,6 +396,7 @@ cmd_install() {
     fi
 
     local env_prompted=0 session_key_generated=0 num_servers=1
+    local -a srv_names=() srv_players=() srv_driver=() srv_admin=()
     if [ -f .env ]; then
         echo "  .env already exists - leaving it alone"
     else
@@ -327,16 +417,19 @@ cmd_install() {
                 warn "'${tz_input}' doesn't look like a valid IANA timezone name - leaving TZ at its default (UTC)."
             fi
 
-            echo "Steam login for steamcmd - typically required for this app (anonymous"
-            echo "login has been observed to fail without the base game in your library)."
-            local steam_user_input steam_pass_input
-            read -r -p "STEAM_USER [blank = try anonymous]: " steam_user_input
-            if [ -n "$steam_user_input" ]; then
+            echo "Steam login for steamcmd - required (anonymous login fails for this app)."
+            echo "This account must own/have Assetto Corsa EVO in its library, even though"
+            echo "you're only downloading the dedicated server tool."
+            local steam_user_input="" steam_pass_input=""
+            while [ -z "$steam_user_input" ]; do
+                read -r -p "STEAM_USER: " steam_user_input
+            done
+            while [ -z "$steam_pass_input" ]; do
                 read -r -s -p "STEAM_PASS: " steam_pass_input
                 echo ""
-                set_env_var STEAM_USER "$steam_user_input"
-                set_env_var STEAM_PASS "$steam_pass_input"
-            fi
+            done
+            set_env_var STEAM_USER "$steam_user_input"
+            set_env_var STEAM_PASS "$steam_pass_input"
 
             echo ""
             local num_servers_input
@@ -347,6 +440,31 @@ cmd_install() {
             else
                 warn "'${num_servers_input}' isn't a valid number - defaulting to 1."
             fi
+
+            # Collect every server's config up front, in order (server 1,
+            # server 2, ...), so the rest of setup can run unattended once
+            # the container is started below - no prompts mid-download.
+            local si
+            for ((si = 1; si <= num_servers; si++)); do
+                echo ""
+                echo "${C_BOLD}--- Server ${si} ---${C_RESET}"
+                local si_name si_players si_driver si_admin
+                read -r -p "Name [Server ${si}]: " si_name
+                si_name="${si_name:-Server ${si}}"
+                read -r -p "Max players [16]: " si_players
+                si_players="${si_players:-16}"
+                if ! [[ "$si_players" =~ ^[0-9]+$ ]]; then
+                    warn "'${si_players}' isn't a number - using 16."
+                    si_players=16
+                fi
+                read -r -p "Driver password (blank = none): " si_driver
+                read -r -s -p "Admin password (blank = none): " si_admin
+                echo ""
+                srv_names+=("$si_name")
+                srv_players+=("$si_players")
+                srv_driver+=("$si_driver")
+                srv_admin+=("$si_admin")
+            done
             echo ""
         else
             warn "No terminal attached - skipping the TZ/Steam/server-count prompts (left at .env.example defaults)."
@@ -400,32 +518,41 @@ cmd_install() {
         echo "    Once you've downloaded one, re-run this script (or use: $0 update-manager) to pick it up."
     fi
 
-    # Auto-provision extra servers end-to-end (boot + add-server + reboot) if
-    # everything needed is in place. Anything short of that just falls back
-    # to printing the manual step - a failure here should never fail install.
+    # Auto-provision end-to-end (boot + configure every server in order +
+    # reboot) if everything needed is in place and there's something to do.
+    # Anything short of that just falls back to printing the manual step -
+    # a failure here should never fail install.
     local auto_provisioned=0
-    if [ "$num_servers" -gt 1 ] && [ -n "$latest_version" ] && command -v docker >/dev/null 2>&1; then
-        log "Setting up ${num_servers} servers - starting the container (this takes a few"
-        echo "    minutes the first time, steamcmd downloads the game server)..."
+    if [ "${#srv_names[@]}" -gt 0 ] && [ -n "$latest_version" ] && command -v docker >/dev/null 2>&1; then
+        log "Finishing setup - starting the container (this takes a few minutes the"
+        echo "    first time, steamcmd downloads the game server)..."
         if docker compose up -d && wait_for_container_ready; then
+            # Server 1 already exists as server_0 (auto-created by the
+            # manager) - configure it in place. Everything after that is a
+            # genuinely new server.
+            set_server_config server_0 "${srv_names[0]}" "${srv_players[0]}" "${srv_driver[0]}" "${srv_admin[0]}"
             local i
-            for ((i = 1; i < num_servers; i++)); do
-                cmd_add_server || true
+            for ((i = 1; i < ${#srv_names[@]}; i++)); do
+                cmd_add_server "${srv_names[i]}" "${srv_players[i]}" "${srv_driver[i]}" "${srv_admin[i]}" || true
             done
-            log "Restarting to pick up the new servers..."
+            log "Restarting to pick up the changes..."
             docker compose up -d
             auto_provisioned=1
         else
-            warn "Didn't finish auto-adding the extra servers in time - the container is"
-            echo "    likely still starting up in the background (nothing is broken)."
+            warn "Didn't finish setting up in time - the container is likely still"
+            echo "    starting up in the background (nothing is broken)."
             echo "    Check progress: docker compose logs -f acevo-server-manager"
-            echo "    Once it's up, add the rest yourself: $0 add-server"
+            echo "    Once it's up, run this again to finish configuring your server(s): $0 install"
         fi
     fi
 
     echo ""
     if [ "$auto_provisioned" = "1" ]; then
-        success "Done. ${num_servers} servers are configured and running."
+        if [ "$num_servers" -gt 1 ]; then
+            success "Done. ${num_servers} servers are configured and running."
+        else
+            success "Done. Your server is configured and running."
+        fi
         echo "  docker compose logs -f acevo-server-manager"
     else
         success "Done. Remaining steps:"
@@ -435,15 +562,17 @@ cmd_install() {
             step=$((step + 1))
         fi
         if [ "$env_prompted" != "1" ]; then
-            echo "  ${step}. Fill in .env: TZ, and STEAM_USER/STEAM_PASS if anonymous steamcmd login"
-            echo "     doesn't work for downloading the game server."
+            echo "  ${step}. Fill in .env: TZ, and required STEAM_USER/STEAM_PASS (the account must"
+            echo "     own/have Assetto Corsa EVO in its library)."
             step=$((step + 1))
         fi
         echo "  ${step}. docker compose up -d"
         echo "     docker compose logs -f acevo-server-manager"
-        if [ "$num_servers" -gt 1 ]; then
+        if [ "${#srv_names[@]}" -gt 0 ]; then
             step=$((step + 1))
-            echo "  ${step}. Once it's up: $0 add-server (run $((num_servers - 1)) more time(s))"
+            echo "  ${step}. Once it's up, apply the server settings you just entered yourself"
+            echo "     (they weren't saved - no release zip was placed yet to start the"
+            echo "     container with): $0 rename-server, then $0 add-server for any more."
         fi
     fi
     echo ""
@@ -597,6 +726,7 @@ Commands:
   update-manager <zip> [ver]  Install a new manager release and restart (add --dev for local build)
   update-game                 Re-run steamcmd inside the running container to update game files
   add-server ["Name"]         Register a new server with the manager and publish its ports
+  rename-server [id] [name]   Change an existing server's display name (e.g. server_0)
   status                      Show current version, configured servers, and container state
   help                        Show this message
 
@@ -610,19 +740,21 @@ cmd_menu() {
     echo "  ${C_BOLD}2)${C_RESET} Update manager release"
     echo "  ${C_BOLD}3)${C_RESET} Update game server files (steamcmd)"
     echo "  ${C_BOLD}4)${C_RESET} Add a server"
-    echo "  ${C_BOLD}5)${C_RESET} Show status"
-    echo "  ${C_BOLD}6)${C_RESET} Exit"
+    echo "  ${C_BOLD}5)${C_RESET} Rename a server"
+    echo "  ${C_BOLD}6)${C_RESET} Show status"
+    echo "  ${C_BOLD}7)${C_RESET} Exit"
     echo ""
     local choice
-    read -r -p "Choice [1-6]: " choice
+    read -r -p "Choice [1-7]: " choice
     echo ""
     case "$choice" in
         1) cmd_install ;;
         2) cmd_update_manager ;;
         3) cmd_update_game ;;
         4) cmd_add_server ;;
-        5) cmd_status ;;
-        6) exit 0 ;;
+        5) cmd_rename_server ;;
+        6) cmd_status ;;
+        7) exit 0 ;;
         *) error "Unknown choice."; exit 1 ;;
     esac
 }
@@ -635,6 +767,7 @@ case "${1:-}" in
     update-manager) shift; cmd_update_manager "$@" ;;
     update-game) shift; cmd_update_game "$@" ;;
     add-server) shift; cmd_add_server "$@" ;;
+    rename-server) shift; cmd_rename_server "$@" ;;
     status) shift; cmd_status "$@" ;;
     help|-h|--help) cmd_help ;;
     "") cmd_menu ;;
