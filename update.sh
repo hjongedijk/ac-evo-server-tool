@@ -1,5 +1,5 @@
 #!/bin/bash
-# Usage: ./bin/update.sh /path/to/acevo-server-manager_v1_6_4.zip [version] [--dev]
+# Usage: ./update.sh /path/to/acevo-server-manager_v1_6_4.zip [version] [--dev]
 #
 # Copies a new release zip AS-IS into releases/<version>/ (no extraction
 # needed - the container extracts it automatically on start), updates .env
@@ -13,13 +13,12 @@
 #
 # Version is normally auto-detected from the filename (handles suffixes like
 # "v1_6_4-1" -> "v1.6.4-1"), but you can always override it explicitly:
-#   ./bin/update.sh acevo-server-manager_v1_6_4-1.zip v1.6.4-1
+#   ./update.sh acevo-server-manager_v1_6_4-1.zip v1.6.4-1
 #
 # Can be run from anywhere (cds to the repo root automatically).
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Pull out --dev from the args wherever it appears.
 DEV=0

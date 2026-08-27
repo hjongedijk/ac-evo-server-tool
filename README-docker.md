@@ -35,14 +35,14 @@ acsm-evo/
 ├── .env                         <- YOUR config: version, Steam creds, etc. (gitignored)
 ├── .env.example                 <- tracked template, copy to .env
 ├── .gitignore
-├── TOOLING_VERSION               <- current tooling version, updated by bin/release.sh
+├── TOOLING_VERSION               <- current tooling version, updated by release.sh
 ├── README.md
 ├── README-docker.md
+├── update.sh                     <- run this to install a new manager release
+├── release.sh                    <- run this to cut a new tooling release
 ├── bin/
 │   ├── Dockerfile
 │   ├── entrypoint.sh
-│   ├── update.sh                 <- run this to install a new manager release
-│   ├── release.sh                 <- run this to cut a new tooling release
 │   └── debug-steamcmd.sh
 ├── releases/
 │   └── v1.6.3/
@@ -145,7 +145,7 @@ immediately.
 When Emperor Servers ships a new version:
 
 ```bash
-./bin/update.sh /path/to/acevo-server-manager_v1_6_4.zip
+./update.sh /path/to/acevo-server-manager_v1_6_4.zip
 ```
 
 This works from anywhere — it locates the repo root automatically, copies
@@ -157,14 +157,14 @@ server, database) is never touched.
 
 Use `--dev` if you're running the local-build compose file instead:
 ```bash
-./bin/update.sh /path/to/acevo-server-manager_v1_6_4.zip --dev
+./update.sh /path/to/acevo-server-manager_v1_6_4.zip --dev
 ```
 
 Version numbers with a hotfix/build suffix (e.g. `v1.6.4-1`) are handled
 automatically. If a filename doesn't parse cleanly, pass the version
 explicitly:
 ```bash
-./bin/update.sh acevo-server-manager_v1_6_4-1.zip v1.6.4-1
+./update.sh acevo-server-manager_v1_6_4-1.zip v1.6.4-1
 ```
 
 The entrypoint also does a light check on every start: if the new release's
@@ -190,18 +190,18 @@ docker compose up -d
 
 ## Cutting a GitHub release of this tooling
 
-The easiest way is `bin/release.sh`, which bumps the version, runs the same
+The easiest way is `release.sh`, which bumps the version, runs the same
 lint checks CI runs (so failures surface locally before pushing), commits,
 tags, and pushes:
 
 ```bash
-./bin/release.sh           # auto-computes the next version, e.g. tooling-v1.0.0 -> tooling-v1.0.1
-./bin/release.sh next "Fix XDG_RUNTIME_DIR handling"   # with a custom commit message
-./bin/release.sh tooling-v2.0.0                        # explicit version (e.g. a MAJOR bump)
+./release.sh           # auto-computes the next version, e.g. v0.0.1 -> v0.0.2
+./release.sh next "Fix XDG_RUNTIME_DIR handling"   # with a custom commit message
+./release.sh v2.0.0                                # explicit version (e.g. a MAJOR bump)
 ```
 
 It writes the resolved version into `TOOLING_VERSION` (tracked in git, purely
-for reference), then pushes a `tooling-v*` tag. It does **not** create the
+for reference), then pushes a `v*` tag. It does **not** create the
 GitHub Release itself — `.github/workflows/release.yml` already handles that
 automatically whenever it sees the tag pushed, so the script's job stops
 once the tag is on GitHub.
@@ -209,22 +209,22 @@ once the tag is on GitHub.
 That workflow does three things:
 1. **Lints** the Dockerfile, shell scripts, and both compose files.
 2. **Builds and pushes the base image** to `ghcr.io/<owner>/<repo>` tagged
-   both `latest` and the clean version (e.g. `v1.0.0` — the `tooling-`
-   prefix is stripped for the actual published image tag). This image
-   contains zero proprietary content, so it's safe to publish.
+   both `latest` and the version (e.g. `v0.0.1`). This image contains zero
+   proprietary content, so it's safe to publish.
 3. **Packages the tooling** (`bin/`, both compose files, both READMEs, etc.)
    into a downloadable zip attached to a GitHub Release.
 
 Prefer doing it by hand instead? Skip the script:
 ```bash
-git tag tooling-v1.0.0
-git push origin tooling-v1.0.0
+git tag v0.0.1
+git push origin v0.0.1
 ```
 
-This is deliberately a **separate versioning scheme** from `ACEVO_VERSION`
-(the `v1.6.3`-style folder names under `releases/` that track the upstream
-manager release) — the `tooling-v` prefix keeps the two from colliding or
-being confused with each other. Bump this whenever you change the
+This is a **separate versioning scheme** from `ACEVO_VERSION` (the
+`v1.6.3`-style folder names under `releases/` that track the upstream
+manager release) — it just happens to share the same `v*` tag format, so
+avoid tagging a release here with a version number that could be mistaken
+for an upstream manager release. Bump this whenever you change the
 Dockerfile, compose files, entrypoint, or update/release scripts in a way
 worth snapshotting; it's independent of whatever manager version happens to
 be active in `.env` at the time.

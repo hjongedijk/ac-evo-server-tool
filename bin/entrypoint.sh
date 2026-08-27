@@ -84,7 +84,9 @@ else
     MISSING=$(comm -23 <(echo "$NEW_KEYS") <(echo "$EXISTING_KEYS") 2>/dev/null)
     if [ -n "$MISSING" ]; then
         echo "NOTE: this release's default config.yml has top-level keys not found in your config.yml:"
-        echo "$MISSING" | sed 's/^/  - /'
+        while IFS= read -r key; do
+            echo "  - $key"
+        done <<< "$MISSING"
         echo "Check CHANGELOG.txt and merge any relevant new options in manually."
     fi
 fi

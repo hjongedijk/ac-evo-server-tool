@@ -47,7 +47,7 @@ runtime from your own `releases/<version>/` folder, either as a raw zip
 ## Updating
 
 ```bash
-./bin/update.sh /path/to/acevo-server-manager_v1_6_4.zip
+./update.sh /path/to/acevo-server-manager_v1_6_4.zip
 ```
 
 No rebuild needed — see [README-docker.md](README-docker.md#updating-to-a-new-manager-release)

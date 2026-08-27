@@ -1,26 +1,25 @@
 #!/usr/bin/env bash
-# bin/release.sh — bump the tooling version, sanity-check, commit, tag, push.
-# Usage: ./bin/release.sh [tooling-v1.0.1|next] ["optional commit message"]
+# release.sh — bump the tooling version, sanity-check, commit, tag, push.
+# Usage: ./release.sh [v1.0.1|next] ["optional commit message"]
 #
 # Unlike some other projects' release scripts, this one does NOT call
 # `gh release create` itself — .github/workflows/release.yml already does
 # that automatically (plus builds and pushes the Docker image to GHCR)
-# whenever a "tooling-v*" tag is pushed. This script's job is just: bump,
+# whenever a "v*" tag is pushed. This script's job is just: bump,
 # lint, commit, tag, push - then GitHub Actions takes it from there.
 #
 # "next" (default) auto-computes the next version from the latest
-# "tooling-v*" git tag, rolling PATCH over into MINOR at 99:
-# tooling-v1.0.99 -> tooling-v1.1.00 -> ... indefinitely. Pass an explicit
+# "v*" git tag, rolling PATCH over into MINOR at 99:
+# v1.0.99 -> v1.1.00 -> ... indefinitely. Pass an explicit
 # version to override this (e.g. for a MAJOR bump or an -rc suffix). You can
-# pass it with or without the "tooling-v" prefix - it's added automatically
+# pass it with or without the "v" prefix - it's added automatically
 # if missing.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_ROOT"
 
-PREFIX="tooling-v"
+PREFIX="v"
 RAW_VERSION="${1:-next}"
 COMMIT_MESSAGE="${2:-}"
 
@@ -30,7 +29,7 @@ next_version() {
   local latest
   latest="$(git tag --list "${PREFIX}[0-9]*.[0-9]*.[0-9]*" | sort -V | tail -1)"
   if [[ -z "$latest" ]]; then
-    echo "${PREFIX}1.0.0"
+    echo "${PREFIX}0.0.1"
     return
   fi
   local ver="${latest#"$PREFIX"}"
@@ -59,7 +58,7 @@ if [[ "$RAW_VERSION" == "next" ]]; then
   echo "==> Auto-computed next version: $VERSION"
 else
   VERSION="$RAW_VERSION"
-  # Accept "1.0.1", "v1.0.1", or "tooling-v1.0.1" - normalize to the latter.
+  # Accept "1.0.1" or "v1.0.1" - normalize to the latter.
   if [[ "$VERSION" != "${PREFIX}"* ]]; then
     VERSION="${PREFIX}${VERSION#v}"
   fi
@@ -67,8 +66,8 @@ fi
 
 # ── Validation ────────────────────────────────────────────────────────────────
 
-if ! [[ "$VERSION" =~ ^tooling-v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9._-]+)?$ ]]; then
-  echo "Version must look like tooling-v1.0.1 or tooling-v1.0.1-rc1"
+if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9._-]+)?$ ]]; then
+  echo "Version must look like v1.0.1 or v1.0.1-rc1"
   exit 1
 fi
 
@@ -91,7 +90,7 @@ echo "$IMAGE_VERSION" > "$REPO_ROOT/TOOLING_VERSION"
 echo "==> Running local sanity checks (mirrors the CI lint job)"
 
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck bin/*.sh
+  shellcheck ./*.sh bin/*.sh
 else
   echo "  shellcheck not installed locally - skipping (CI will still catch issues)"
 fi
