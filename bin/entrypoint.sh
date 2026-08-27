@@ -111,29 +111,42 @@ if [ ! -f "${ACEVO_HOME}/ACEVO.License" ]; then
     exit 1
 fi
 
-# --- Optionally auto-install/update the game server via steamcmd -------------
-# Set ACEVO_STEAM_APPID and ACEVO_AUTO_UPDATE=1 to enable this on container start.
-# Find the correct App ID for the AC EVO dedicated server before using this.
+# --- Auto-install the game server via steamcmd on first run ------------------
+# Set ACEVO_STEAM_APPID and ACEVO_AUTO_UPDATE=1 to enable this. Find the
+# correct App ID for the AC EVO dedicated server before using this.
 #
-# By default this uses anonymous login, which is enough for most dedicated
-# server downloads. If the AC EVO server requires a login tied to your own
-# Steam account/library, set STEAM_USER and STEAM_PASS (see docker-compose.yml
-# for how to pass these in securely via an env file rather than hardcoding
-# them). NOTE: if Steam Guard / 2FA is enabled on the account, the first run
-# will need to be done interactively once (docker compose run --rm ...) to
-# enter the Steam Guard code, since steamcmd will otherwise hang waiting for
-# input. After that first successful login, steamcmd caches the auth so
-# subsequent unattended runs succeed.
+# Only runs once, to bootstrap a fresh install (detected via steamcmd's own
+# appmanifest marker file) - it does NOT re-validate on every restart, since
+# that turned out to mean "always updating" on every reboot for no reason.
+# Once the game files exist, update them on demand instead:
+#   ./acsm-evo-control.sh update-game
+#
+# Steam credentials (STEAM_USER/STEAM_PASS) are typically REQUIRED for this
+# app - anonymous login has been observed to fail for accounts that don't
+# have the base game in their library, even though this is nominally a free
+# dedicated-server tool. Set them in .env (see docker-compose.yml for how
+# they're passed in). NOTE: if Steam Guard / 2FA is enabled on the account,
+# the first run will need to be done interactively once
+# (docker compose run --rm ...) to enter the Steam Guard code, since
+# steamcmd will otherwise hang waiting for input. After that first
+# successful login, steamcmd caches the auth so subsequent unattended runs
+# succeed.
+APPMANIFEST="${SERVER_DIR}/steamapps/appmanifest_${ACEVO_STEAM_APPID}.acf"
 if [ "${ACEVO_AUTO_UPDATE}" = "1" ] && [ -n "${ACEVO_STEAM_APPID}" ]; then
-    if [ -n "${STEAM_USER}" ] && [ -n "${STEAM_PASS}" ]; then
-        echo "Updating game server via steamcmd (app id ${ACEVO_STEAM_APPID}, authenticated)..."
+    if [ -f "${APPMANIFEST}" ]; then
+        echo "Game server already installed (${APPMANIFEST} present) - skipping steamcmd."
+        echo "Use './acsm-evo-control.sh update-game' to update it on demand."
+    elif [ -n "${STEAM_USER}" ] && [ -n "${STEAM_PASS}" ]; then
+        echo "Installing game server via steamcmd (app id ${ACEVO_STEAM_APPID}, authenticated)..."
         steamcmd \
             +force_install_dir "${SERVER_DIR}" \
             +login "${STEAM_USER}" "${STEAM_PASS}" \
             +app_update "${ACEVO_STEAM_APPID}" validate \
             +quit
     else
-        echo "Updating game server via steamcmd (app id ${ACEVO_STEAM_APPID}, anonymous)..."
+        echo "Installing game server via steamcmd (app id ${ACEVO_STEAM_APPID}, anonymous)..."
+        echo "NOTE: anonymous login is known to fail for this app on some accounts - if this"
+        echo "hangs or errors, set STEAM_USER/STEAM_PASS in .env instead."
         steamcmd \
             +force_install_dir "${SERVER_DIR}" \
             +login anonymous \

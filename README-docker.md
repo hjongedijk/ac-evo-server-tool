@@ -88,9 +88,9 @@ you've customized).
 If you're at a real terminal the first time it creates `.env`, it also
 prompts you for:
 - **Timezone** (defaults to `UTC`).
-- **Steam login** for steamcmd — leave blank for anonymous (works fine for
-  the AC EVO dedicated server); only asks for the password if you gave a
-  username.
+- **Steam login** for steamcmd — typically required (see below); only asks
+  for the password if you gave a username, and leaving it blank tries
+  anonymous login anyway.
 - **Number of game servers** you want to run. If you ask for more than one
   and a release zip was found, it does the *entire* rest for you: starts
   the container, waits for the manager's first boot to finish, registers
@@ -157,13 +157,16 @@ At minimum, check in `data/config.yml`:
   default value works unmodified.
 
 **5. Game server files** — the AC EVO dedicated server itself isn't bundled;
-it's fetched via steamcmd on container start. Already wired up via `.env`
-(`ACEVO_AUTO_UPDATE=1`, `ACEVO_STEAM_APPID=4564210` — confirmed correct App
-ID for the AC EVO dedicated server tool). Anonymous login works fine for
-this app — no Steam credentials needed. If you ever do need your own
-account, fill in `STEAM_USER`/`STEAM_PASS` in `.env`; Steam Guard/2FA
-accounts need one interactive run first:
-`docker compose run --rm acevo-server-manager`.
+it's fetched via steamcmd the first time the container starts (already
+wired up via `.env`'s `ACEVO_AUTO_UPDATE=1`/`ACEVO_STEAM_APPID=4564210` —
+confirmed correct App ID for the AC EVO dedicated server tool; it only
+installs once, not on every restart — see
+[Updating game server files](#updating-game-server-files)). **Steam
+credentials are typically required** — anonymous login has been observed to
+fail for accounts that don't have the base game in their library, even
+though this is nominally a free dedicated-server tool. Fill in
+`STEAM_USER`/`STEAM_PASS` in `.env`; Steam Guard/2FA accounts need one
+interactive run first: `docker compose run --rm acevo-server-manager`.
 
 **6. Game server ports** — each server has its own TCP+UDP port pair, and
 that traffic won't reach the container at all until it's published in

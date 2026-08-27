@@ -316,10 +316,10 @@ cmd_install() {
                 warn "'${tz_input}' doesn't look like a valid IANA timezone name - leaving TZ at its default (UTC)."
             fi
 
-            echo "Steam login for steamcmd - anonymous works fine for the AC EVO dedicated"
-            echo "server, only fill this in if that doesn't work for you."
+            echo "Steam login for steamcmd - typically required for this app (anonymous"
+            echo "login has been observed to fail without the base game in your library)."
             local steam_user_input steam_pass_input
-            read -r -p "STEAM_USER [blank = anonymous]: " steam_user_input
+            read -r -p "STEAM_USER [blank = try anonymous]: " steam_user_input
             if [ -n "$steam_user_input" ]; then
                 read -r -s -p "STEAM_PASS: " steam_pass_input
                 echo ""
