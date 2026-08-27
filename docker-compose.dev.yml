@@ -1,0 +1,47 @@
+services:
+  acevo-server-manager:
+    # Local build from source - use this for testing changes to the
+    # Dockerfile/entrypoint before pushing a tooling release. For normal
+    # day-to-day running, use docker-compose.yml instead (pulls the
+    # published image from GHCR - no local build needed).
+    build:
+      context: .
+      dockerfile: bin/Dockerfile
+    container_name: acevo-server-manager
+    restart: unless-stopped
+    env_file:
+      # Single source for all runtime config (ACEVO_AUTO_UPDATE,
+      # ACEVO_STEAM_APPID, STEAM_USER/PASS, etc.) - copy .env.example to
+      # .env and fill in your values. `required: false` means the container
+      # still starts fine without it (e.g. anonymous steamcmd login, no
+      # auto-update) rather than hard-failing.
+      - path: ./.env
+        required: false
+    ports:
+      - "8773:8773"       # web UI
+      # Game server ports - these MUST match what's shown on the server's
+      # "Server Options" page in the web UI (server_tcp/udp_listener_port and
+      # server_http_port). The manager assigned 9800 (TCP+UDP) and 9801 (TCP)
+      # to the first server by default - update these if you change the port
+      # in the UI or add additional servers.
+      - "9800:9800/udp"
+      - "9800:9800/tcp"
+      - "9801:9801/tcp"
+    volumes:
+      # Versioned manager release, mounted read-only. Can be EITHER a
+      # pre-extracted linux/ folder OR the untouched release .zip dropped
+      # directly in releases/<version>/ - the entrypoint auto-extracts a
+      # zip if present, no manual unzipping needed. Switch versions by
+      # changing ACEVO_VERSION in .env, no rebuild needed.
+      - ./releases/${ACEVO_VERSION:-v1.6.3}:/acevo/vendor-src:ro
+      # Persist manager config across restarts/upgrades
+      - ./data/config.yml:/acevo/config.yml
+      # Your license file (get this from the emperorservers.com control panel)
+      - ./data/ACEVO.License:/acevo/ACEVO.License
+      # Game server files (downloaded via steamcmd or copied in manually)
+      - ./data/server:/acevo/server
+      # Manager's own JSON store DIRECTORY (per config.yml's `store.path`).
+      # Despite the default name "store.json", the manager treats this as a
+      # directory it manages internally (not a single JSON file) - so we
+      # mount a real directory here, not a file.
+      - ./data/store:/acevo/store

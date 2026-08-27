@@ -1,0 +1,142 @@
+name: Release tooling
+
+# Triggers on tags like "tooling-v1.0.0" - deliberately NOT "v*", since that
+# would collide with ACEVO_VERSION-style tags (v1.6.3 etc.) that describe the
+# upstream manager release, not this repo's own tooling.
+on:
+  push:
+    tags:
+      - "tooling-v*"
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shellcheck all scripts
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: "./bin"
+
+      - name: Lint Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: bin/Dockerfile
+          # Style-only rules that don't matter for this base image are
+          # ignored rather than failing the build:
+          #   DL3008/DL3009 - apt version pinning (base image manages this)
+          ignore: DL3008,DL3009
+
+      - name: Validate docker-compose.yml (prod, published image)
+        run: docker compose -f docker-compose.yml config -q
+        env:
+          ACEVO_VERSION: v0.0.0-lint
+          IMAGE_TAG: latest
+
+      - name: Validate docker-compose.dev.yml (local build)
+        run: docker compose -f docker-compose.dev.yml config -q
+        env:
+          ACEVO_VERSION: v0.0.0-lint
+
+  build-and-push-image:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image version (strip "tooling-" prefix)
+        id: version
+        run: |
+          # Git tag is "tooling-v1.0.0" (to avoid colliding with
+          # ACEVO_VERSION-style tags), but the published image tag should
+          # just be the clean "v1.0.0".
+          echo "value=${GITHUB_REF_NAME#tooling-}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push base image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: bin/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.value }}
+          # NOTE: this image contains ONLY Wine + steamcmd + entrypoint
+          # logic - no proprietary Emperor Servers code - so it's safe to
+          # publish. The actual manager binary is supplied by users at
+          # runtime via a volume mount, never baked into this image.
+
+      - name: Note on package visibility
+        run: |
+          echo "If this is the first push, the GHCR package may default to"
+          echo "private. Set it to public under:"
+          echo "  https://github.com/${{ github.repository }}/pkgs/container/$(basename ${{ github.repository }})/settings"
+          echo "so docker-compose.yml can pull it without authentication."
+
+  release:
+    needs: [lint, build-and-push-image]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image version (strip "tooling-" prefix)
+        id: version
+        run: echo "value=${GITHUB_REF_NAME#tooling-}" >> "$GITHUB_OUTPUT"
+
+      - name: Package tooling
+        run: |
+          mkdir -p dist
+          # Core tooling only - no Steam-related files, no releases/ folder
+          # (proprietary manager binary/config is gitignored and never
+          # present in this repo anyway, but skip the folder entirely too).
+          zip -r "dist/acsm-evo-tooling-${GITHUB_REF_NAME}.zip" \
+            bin/ \
+            docker-compose.yml \
+            docker-compose.dev.yml \
+            .env.example \
+            .gitignore \
+            TOOLING_VERSION \
+            README.md \
+            README-docker.md \
+            -x "*.DS_Store"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true
+          body: |
+            Tooling release for the ACEVO Server Manager Docker setup.
+
+            A base image (Wine + steamcmd + entrypoint only - no
+            proprietary Emperor Servers code) was also built and published
+            to `ghcr.io/${{ github.repository }}:${{ steps.version.outputs.value }}`
+            and `ghcr.io/${{ github.repository }}:latest`.
+
+            **This release does not include the acevo-server-manager
+            binary, config.yml, or Steam credentials** - those are
+            proprietary/secret and must be sourced separately: download
+            the manager release from your Emperor Servers control panel
+            and drop the zip straight into `releases/<version>/` (no
+            extraction needed - the container handles that automatically),
+            and copy `.env.example` to `.env` filling in Steam credentials
+            if needed. See `README-docker.md`.
+
+            To use: extract this zip, add your manager release under
+            `releases/<version>/`, add your license under `data/`, copy
+            `.env.example` to `.env` and set `ACEVO_VERSION` /
+            `IMAGE_TAG` (`${{ steps.version.outputs.value }}` or `latest`),
+            then `docker compose up -d` (pulls the published image - no
+            local build needed).

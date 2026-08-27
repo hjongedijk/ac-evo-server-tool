@@ -1,0 +1,15 @@
+# Runtime/persistent data - never commit, this is your live server state
+data/
+
+# Contains Steam credentials + local settings - copy from .env.example
+.env
+.env.local
+
+# Release binaries/configs are large and (per the Steam EULA) shouldn't be
+# freely redistributed - keep the release folder structure in git via a
+# .gitkeep, but not the actual binary/config contents.
+releases/*/linux/acevo-server-manager
+releases/*/linux/config.yml
+releases/*/*.exe
+releases/*/windows/
+releases/*/*.zip
