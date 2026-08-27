@@ -71,6 +71,36 @@ generate_secret() {
     fi
 }
 
+# Publish ports in docker-compose.yml for servers 2..N, matching the port
+# scheme the manager itself uses when you add a server in the UI (each
+# server gets TCP+UDP on 9800+2*(i-1), plus a TCP-only web port one above
+# that - server 1 is 9800/9800/9801, server 2 is 9802/9802/9803, etc). Only
+# touches the block between the "additional-server-ports-marker" comment and
+# the three example lines right after it in docker-compose.yml.
+configure_server_ports() {
+    local n="$1"
+    if [ "$n" -le 1 ]; then
+        awk '/# additional-server-ports-marker/ {skip=4; next} skip>0 {skip--; next} {print}' \
+            docker-compose.yml > docker-compose.yml.tmp
+        mv docker-compose.yml.tmp docker-compose.yml
+        return
+    fi
+    local lines=() i port http
+    for ((i = 2; i <= n; i++)); do
+        port=$((9800 + (i - 1) * 2))
+        http=$((port + 1))
+        lines+=("      - \"${port}:${port}/udp\"     # server ${i}")
+        lines+=("      - \"${port}:${port}/tcp\"")
+        lines+=("      - \"${http}:${http}/tcp\"")
+    done
+    local extra
+    extra=$(printf '%s\n' "${lines[@]}")
+    awk -v extra="$extra" \
+        '/# additional-server-ports-marker/ {print extra; skip=4; next} skip>0 {skip--; next} {print}' \
+        docker-compose.yml > docker-compose.yml.tmp
+    mv docker-compose.yml.tmp docker-compose.yml
+}
+
 # --- Scaffold directories -------------------------------------------------
 echo "==> Creating data/ and releases/ directories"
 mkdir -p data/server data/store.json releases
@@ -118,9 +148,29 @@ else
             set_env_var STEAM_USER "$STEAM_USER_INPUT"
             set_env_var STEAM_PASS "$STEAM_PASS_INPUT"
         fi
+
+        echo ""
+        read -r -p "  How many game servers do you want to run? [1]: " NUM_SERVERS_INPUT
+        NUM_SERVERS_INPUT="${NUM_SERVERS_INPUT:-1}"
+        if [[ "$NUM_SERVERS_INPUT" =~ ^[0-9]+$ ]] && [ "$NUM_SERVERS_INPUT" -ge 1 ]; then
+            configure_server_ports "$NUM_SERVERS_INPUT"
+            if [ "$NUM_SERVERS_INPUT" -gt 1 ]; then
+                echo "  Published ports in docker-compose.yml for ${NUM_SERVERS_INPUT} servers (server 1:"
+                echo "  9800/9800/9801, server 2: 9802/9802/9803, ...). Create each additional server"
+                echo "  in the web UI after starting - it should get matching ports automatically."
+                echo "  If a server ends up with a different port than expected, update"
+                echo "  docker-compose.yml to match and restart. Don't forget to forward each"
+                echo "  server's ports at your router/firewall too."
+            fi
+        else
+            echo "  '${NUM_SERVERS_INPUT}' isn't a valid number - leaving docker-compose.yml at its"
+            echo "  single-server default. Add more ports by hand later if needed (see the"
+            echo "  commented example lines in docker-compose.yml)."
+        fi
         echo ""
     else
-        echo "  No terminal attached - skipping the TZ/Steam prompts (left at .env.example defaults)."
+        echo "  No terminal attached - skipping the TZ/Steam/server-count prompts (left at"
+        echo "  .env.example and docker-compose.yml defaults)."
     fi
 fi
 

@@ -76,18 +76,31 @@ chmod +x install.sh
 It fetches `docker-compose.yml`, `.env.example`, and `update.sh` from
 GitHub; creates the `data/`/`releases/` directories; moves your license and
 release zip into place (`data/ACEVO.License` and `releases/<version>/`);
-seeds `data/config.yml` from the zip; and creates `.env` with
-`ACEVO_VERSION` already set to match. It never overwrites a file that's
-already there, so it's safe to re-run (e.g. after dropping in a new release
-zip, to pick it up without touching anything you've customized).
+seeds `data/config.yml` from the zip with a **freshly generated random
+`http.session_key`**; and creates `.env` with `ACEVO_VERSION` already set to
+match. `.env.example` is deleted once it's no longer needed. It never
+overwrites a file that's already there, so it's safe to re-run (e.g. after
+dropping in a new release zip, to pick it up without touching anything
+you've customized).
 
-After it runs, there are still a few manual steps — none of them
-automatable, since they're either secrets or account-gated downloads:
-- Review `data/config.yml`: set `http.session_key` to a random secret.
-- Fill in `.env`: `TZ`, and `STEAM_USER`/`STEAM_PASS` only if anonymous
-  steamcmd login doesn't work (see step 5 below for details).
-- Game server ports (see step 6 below) if you're not using the defaults.
-- `docker compose up -d`
+If you're at a real terminal the first time it creates `.env`, it also
+prompts you for:
+- **Timezone** (defaults to `UTC`).
+- **Steam login** for steamcmd — leave blank for anonymous (works fine for
+  the AC EVO dedicated server); only asks for the password if you gave a
+  username.
+- **Number of game servers** you want to run — publishes the matching ports
+  in `docker-compose.yml` automatically (server 1: `9800`/`9800`/`9801`,
+  server 2: `9802`/`9802`/`9803`, and so on — the same scheme the manager
+  itself uses when you add a server in the web UI). You still need to
+  create each server in the UI and forward its ports at your
+  router/firewall, but you won't need to hand-edit `docker-compose.yml` for
+  the common case.
+
+Running non-interactively (no terminal attached), or just pressed Enter
+past a prompt? Nothing is lost — everything it would have asked stays at
+its single-server/UTC/anonymous default, and you can still change any of it
+by hand afterward: `docker compose up -d`.
 
 ### Doing it manually (full repo checkout)
 
