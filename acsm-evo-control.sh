@@ -129,16 +129,27 @@ require_container_running() {
     fi
 }
 
+# Default timeout is generous (30 min) because a genuinely fresh install
+# has steamcmd download the whole game server from scratch first (can
+# easily take several minutes depending on network speed) before the
+# manager can even start its own per-server installation step - this is
+# NOT related to whether servers are started/stopped in the web UI.
 wait_for_container_ready() {
-    local timeout="${1:-180}" waited=0
-    log "Waiting for the container to finish its first boot (up to ${timeout}s)..."
-    while [ ! -f "data/server/_manager/servers/server_0/server_config.json" ]; do
+    local timeout="${1:-1800}" waited=0 last_log=""
+    log "Waiting for the container to finish its first boot (up to ${timeout}s - a fresh"
+    echo "    install downloads the whole game server via steamcmd first, so this can take"
+    echo "    a while on the first run)..."
+    while [ ! -f "data/store.json/servers/server_0/serverOptions.json" ]; do
         if [ "$waited" -ge "$timeout" ]; then
             warn "Timed out waiting for server_0 to be ready."
             return 1
         fi
-        sleep 5
-        waited=$((waited + 5))
+        sleep 15
+        waited=$((waited + 15))
+        if [ $((waited % 60)) -eq 0 ]; then
+            last_log=$(docker compose logs --tail 1 acevo-server-manager 2>/dev/null || true)
+            echo "    ...still waiting (${waited}s elapsed). Latest: ${last_log}"
+        fi
     done
     log "Ready (took ~${waited}s)."
 }
@@ -163,8 +174,8 @@ cmd_add_server() {
     fi
 
     local template_dir="data/server/_manager/servers/server_0"
-    if [ ! -f "${template_dir}/server_config.json" ]; then
-        error "server_0's game files aren't ready yet (${template_dir}/server_config.json missing)."
+    if [ ! -f "${template_dir}/AssettoCorsaEVOServer.exe" ]; then
+        error "server_0's game files aren't ready yet (${template_dir}/AssettoCorsaEVOServer.exe missing)."
         echo "Make sure the container has started and fully booted at least once:" >&2
         echo "  docker compose up -d" >&2
         exit 1
@@ -405,7 +416,10 @@ cmd_install() {
             docker compose up -d
             auto_provisioned=1
         else
-            warn "Automatic setup didn't complete - add the rest yourself with: $0 add-server"
+            warn "Didn't finish auto-adding the extra servers in time - the container is"
+            echo "    likely still starting up in the background (nothing is broken)."
+            echo "    Check progress: docker compose logs -f acevo-server-manager"
+            echo "    Once it's up, add the rest yourself: $0 add-server"
         fi
     fi
 
