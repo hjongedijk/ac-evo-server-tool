@@ -1,36 +1,19 @@
 services:
   acevo-server-manager:
-    # Published base image (Wine + steamcmd + entrypoint) - contains no
-    # proprietary Emperor Servers code, so it's safe to build+publish
-    # publicly via GitHub Actions.
+    # No proprietary Emperor Servers code - safe to publish publicly.
     image: ghcr.io/hjongedijk/ac-evo-server-tool:${IMAGE_TAG:-latest}
-    # Always check for a newer image matching the tag before starting -
-    # without this, `docker compose up -d` silently reuses whatever's
-    # already cached locally, even if a newer ":latest" (or the same
-    # pinned version tag, rebuilt) has since been published.
+    # Without this, `docker compose up -d` reuses whatever's cached locally
+    # even if a newer image has since been published.
     pull_policy: always
     container_name: acevo-server-manager
     restart: unless-stopped
     env_file:
-      # Single source for all runtime config (ACEVO_AUTO_UPDATE,
-      # ACEVO_STEAM_APPID, STEAM_USER/PASS, etc.) - copy .env.example to
-      # .env and fill in your values. `required: false` means the container
-      # still starts fine without it (e.g. anonymous steamcmd login, no
-      # auto-update) rather than hard-failing.
       - path: ./.env
         required: false
     ports:
       - "8773:8773"       # web UI
-      # Game server ports - these MUST match what's shown on each server's
-      # "Server Options" page in the web UI (server_tcp/udp_listener_port and
-      # server_http_port). The manager assigns 9800 (TCP+UDP) and 9801 (TCP)
-      # to the first server by default, then +2 per additional server
-      # (9802/9803, 9804/9805, ...). Nothing here is auto-discovered - every
-      # server needs its own pair of lines added below (and its own port
-      # forwarded at the router/firewall level), or its traffic simply never
-      # reaches the container. `./acsm-evo-control.sh add-server` does this
-      # for you automatically; restart (`docker compose up -d`) after
-      # editing this list by hand.
+      # Must match each server's "Server Options" page in the web UI.
+      # `./acsm-evo-control.sh add-server` manages these for you.
       - "9800:9800/udp"     # server 1 (default)
       - "9800:9800/tcp"
       - "9801:9801/tcp"
@@ -38,23 +21,12 @@ services:
       # - "9802:9802/tcp"
       # - "9803:9803/tcp"
     volumes:
-      # Versioned manager release, mounted read-only from your own copy -
-      # never baked into the published image. Can be EITHER a pre-extracted
-      # linux/ folder OR the untouched release .zip dropped directly in
-      # releases/<version>/ - the entrypoint auto-extracts a zip if present,
-      # no manual unzipping needed. Switch versions by changing
-      # ACEVO_VERSION in .env and restarting; no rebuild or image pull
-      # needed since the image itself doesn't change.
+      # releases/<version>/ - raw .zip (auto-extracted) or pre-extracted
+      # linux/. Switch versions via ACEVO_VERSION in .env + restart.
       - ./releases/${ACEVO_VERSION:-v1.6.3}:/acevo/vendor-src:ro
-      # Persist manager config across restarts/upgrades
       - ./data/config.yml:/acevo/config.yml
-      # Your license file (get this from the emperorservers.com control panel)
       - ./data/ACEVO.License:/acevo/ACEVO.License
-      # Game server files (downloaded via steamcmd or copied in manually)
       - ./data/server:/acevo/server
-      # Manager's own store DIRECTORY (per config.yml's `store.path`, default
-      # "store.json"). Despite the name, the manager treats this as a
-      # directory it manages internally (not a single JSON file) - mounting
-      # a real directory here at the same "store.json" path keeps the
-      # release's default config.yml usable unmodified.
+      # Despite the name, store.path is a directory the manager manages
+      # internally, not a single JSON file.
       - ./data/store.json:/acevo/store.json

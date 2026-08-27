@@ -1,33 +1,19 @@
 services:
   acevo-server-manager:
-    # Local build from source - use this for testing changes to the
-    # Dockerfile/entrypoint before pushing a tooling release. For normal
-    # day-to-day running, use docker-compose.yml instead (pulls the
-    # published image from GHCR - no local build needed).
+    # Local build - for testing Dockerfile/entrypoint changes. For normal
+    # use, use docker-compose.yml instead (pulls the published image).
     build:
       context: .
       dockerfile: bin/Dockerfile
     container_name: acevo-server-manager
     restart: unless-stopped
     env_file:
-      # Single source for all runtime config (ACEVO_AUTO_UPDATE,
-      # ACEVO_STEAM_APPID, STEAM_USER/PASS, etc.) - copy .env.example to
-      # .env and fill in your values. `required: false` means the container
-      # still starts fine without it (e.g. anonymous steamcmd login, no
-      # auto-update) rather than hard-failing.
       - path: ./.env
         required: false
     ports:
       - "8773:8773"       # web UI
-      # Game server ports - these MUST match what's shown on each server's
-      # "Server Options" page in the web UI (server_tcp/udp_listener_port and
-      # server_http_port). The manager assigns 9800 (TCP+UDP) and 9801 (TCP)
-      # to the first server by default, then +2 per additional server
-      # (9802/9803, 9804/9805, ...). Nothing here is auto-discovered - every
-      # server needs its own pair of lines added below (and its own port
-      # forwarded at the router/firewall level), or its traffic simply never
-      # reaches the container. Restart (`docker compose up -d`) after
-      # editing this list.
+      # Must match each server's "Server Options" page in the web UI.
+      # `./acsm-evo-control.sh add-server` manages these for you.
       - "9800:9800/udp"     # server 1 (default)
       - "9800:9800/tcp"
       - "9801:9801/tcp"
@@ -35,21 +21,12 @@ services:
       # - "9802:9802/tcp"
       # - "9803:9803/tcp"
     volumes:
-      # Versioned manager release, mounted read-only. Can be EITHER a
-      # pre-extracted linux/ folder OR the untouched release .zip dropped
-      # directly in releases/<version>/ - the entrypoint auto-extracts a
-      # zip if present, no manual unzipping needed. Switch versions by
-      # changing ACEVO_VERSION in .env, no rebuild needed.
+      # releases/<version>/ - raw .zip (auto-extracted) or pre-extracted
+      # linux/. Switch versions via ACEVO_VERSION in .env, no rebuild needed.
       - ./releases/${ACEVO_VERSION:-v1.6.3}:/acevo/vendor-src:ro
-      # Persist manager config across restarts/upgrades
       - ./data/config.yml:/acevo/config.yml
-      # Your license file (get this from the emperorservers.com control panel)
       - ./data/ACEVO.License:/acevo/ACEVO.License
-      # Game server files (downloaded via steamcmd or copied in manually)
       - ./data/server:/acevo/server
-      # Manager's own store DIRECTORY (per config.yml's `store.path`, default
-      # "store.json"). Despite the name, the manager treats this as a
-      # directory it manages internally (not a single JSON file) - mounting
-      # a real directory here at the same "store.json" path keeps the
-      # release's default config.yml usable unmodified.
+      # Despite the name, store.path is a directory the manager manages
+      # internally, not a single JSON file.
       - ./data/store.json:/acevo/store.json
