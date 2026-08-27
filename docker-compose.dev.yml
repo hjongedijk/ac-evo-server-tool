@@ -19,14 +19,20 @@ services:
         required: false
     ports:
       - "8773:8773"       # web UI
-      # Game server ports - these MUST match what's shown on the server's
+      # Game server ports - these MUST match what's shown on each server's
       # "Server Options" page in the web UI (server_tcp/udp_listener_port and
-      # server_http_port). The manager assigned 9800 (TCP+UDP) and 9801 (TCP)
-      # to the first server by default - update these if you change the port
-      # in the UI or add additional servers.
-      - "9800:9800/udp"
+      # server_http_port). The manager assigns 9800 (TCP+UDP) and 9801 (TCP)
+      # to the first server by default. Nothing here is auto-discovered -
+      # every server needs its own pair of lines added below (and its own
+      # port forwarded at the router/firewall level), or its traffic simply
+      # never reaches the container. Restart (`docker compose up -d`) after
+      # editing this list.
+      - "9800:9800/udp"     # server 1 (default)
       - "9800:9800/tcp"
       - "9801:9801/tcp"
+      # - "9802:9802/udp"   # server 2 - uncomment and match the UI's ports
+      # - "9802:9802/tcp"
+      # - "9803:9803/tcp"
     volumes:
       # Versioned manager release, mounted read-only. Can be EITHER a
       # pre-extracted linux/ folder OR the untouched release .zip dropped

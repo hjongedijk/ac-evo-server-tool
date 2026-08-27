@@ -152,11 +152,19 @@ accounts need one interactive run first:
 **6. Game server ports** — the manager assigns these per-server via its own
 web UI ("Server Options" page), not `config.yml`. Whatever port it shows
 there must match the compose file's `ports:` section — the first server
-defaulted to `9800` (TCP+UDP) and `9801` (TCP). If you change the port in the
-UI or add more servers, update `ports:` to match, **and** make sure that port
-is forwarded from your public IP at the router/firewall level — the game's
-backend does an external UDP reachability check and will shut the server
-down if it can't reach it from outside.
+defaulted to `9800` (TCP+UDP) and `9801` (TCP).
+
+This mapping is **not automatic** — nothing in the container discovers new
+servers and opens their ports for you. If you add a second (or third)
+server in the UI, it gets its own port pair, and that traffic won't reach
+the container at all until you add a matching block to `ports:` in
+`docker-compose.yml` (there are commented-out example lines for a second
+server already there) and restart with `docker compose up -d`. Do this for
+every server you add, and make sure each port is forwarded from your public
+IP at the router/firewall level too — the game's backend does an external
+UDP reachability check and will shut the server down if it can't reach it
+from outside. None of this touches `bin/Dockerfile` — its `EXPOSE` lines
+are documentation only and don't publish anything themselves.
 
 **7. Run it:**
 ```bash
