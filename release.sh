@@ -96,7 +96,7 @@ else
 fi
 
 if command -v hadolint >/dev/null 2>&1; then
-  hadolint --ignore DL3008 --ignore DL3009 bin/Dockerfile
+  hadolint --ignore DL3008 --ignore DL3009 --ignore DL3002 --ignore DL3066 bin/Dockerfile
 else
   echo "  hadolint not installed locally - skipping (CI will still catch issues)"
 fi

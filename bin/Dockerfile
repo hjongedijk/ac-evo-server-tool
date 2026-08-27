@@ -19,6 +19,12 @@ USER root
 # via an interactive debconf prompt. Since `docker build` has no TTY, we
 # pre-seed debconf with acceptance so the install runs unattended.
 ENV DEBIAN_FRONTEND=noninteractive
+
+# Makes RUN steps with a pipe (the debconf-set-selections lines below) fail
+# the build if the left side of the pipe fails, instead of silently
+# succeeding on the right side's exit code alone.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 RUN dpkg --add-architecture i386 && \
     apt-get update && \
     apt-get install -y --no-install-recommends debconf && \

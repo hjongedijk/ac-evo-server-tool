@@ -28,7 +28,11 @@ jobs:
           # Style-only rules that don't matter for this base image are
           # ignored rather than failing the build:
           #   DL3008/DL3009 - apt version pinning (base image manages this)
-          ignore: DL3008,DL3009
+          #   DL3002/DL3066 - image intentionally runs as root throughout:
+          #     the base image itself defaults to root, and entrypoint.sh
+          #     needs it (writing /etc/localtime, managing Wine/steamcmd
+          #     dirs).
+          ignore: DL3008,DL3009,DL3002,DL3066
 
       - name: Validate docker-compose.yml (prod, published image)
         run: docker compose -f docker-compose.yml config -q
