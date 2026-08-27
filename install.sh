@@ -51,6 +51,26 @@ fetch .env.example
 fetch update.sh
 chmod +x update.sh
 
+# --- Helpers ----------------------------------------------------------------
+# Set (or replace) a KEY=value line in .env. Uses grep+append rather than
+# sed substitution so arbitrary secret content (Steam passwords, etc.) never
+# has to be escaped for a sed pattern.
+set_env_var() {
+    local name="$1" value="$2"
+    if [ -f .env ] && grep -q "^${name}=" .env; then
+        grep -v "^${name}=" .env > .env.tmp && mv .env.tmp .env
+    fi
+    echo "${name}=${value}" >> .env
+}
+
+generate_secret() {
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -hex 32
+    else
+        head -c32 /dev/urandom | od -An -tx1 | tr -d ' \n'
+    fi
+}
+
 # --- Scaffold directories -------------------------------------------------
 echo "==> Creating data/ and releases/ directories"
 mkdir -p data/server data/store.json releases
@@ -68,11 +88,40 @@ else
 fi
 
 # --- .env ------------------------------------------------------------------
+ENV_PROMPTED=0
+SESSION_KEY_GENERATED=0
 if [ -f .env ]; then
     echo "==> .env already exists - leaving it alone"
 else
     echo "==> Creating .env from .env.example"
     cp .env.example .env
+
+    if [ -t 0 ]; then
+        ENV_PROMPTED=1
+        echo ""
+        echo "==> A couple of quick settings (press Enter to accept the default):"
+
+        read -r -p "  Timezone, e.g. Europe/Berlin [UTC]: " TZ_INPUT
+        TZ_INPUT="${TZ_INPUT:-UTC}"
+        if [ -f "/usr/share/zoneinfo/${TZ_INPUT}" ]; then
+            set_env_var TZ "$TZ_INPUT"
+        else
+            echo "  '${TZ_INPUT}' doesn't look like a valid IANA timezone name - leaving TZ at its default (UTC)."
+        fi
+
+        echo "  Steam login for steamcmd - anonymous works fine for the AC EVO dedicated"
+        echo "  server, only fill this in if that doesn't work for you."
+        read -r -p "  STEAM_USER [blank = anonymous]: " STEAM_USER_INPUT
+        if [ -n "$STEAM_USER_INPUT" ]; then
+            read -r -s -p "  STEAM_PASS: " STEAM_PASS_INPUT
+            echo ""
+            set_env_var STEAM_USER "$STEAM_USER_INPUT"
+            set_env_var STEAM_PASS "$STEAM_PASS_INPUT"
+        fi
+        echo ""
+    else
+        echo "  No terminal attached - skipping the TZ/Steam prompts (left at .env.example defaults)."
+    fi
 fi
 
 # --- Manager release: pick up the zip you dropped alongside this script ---
@@ -111,28 +160,35 @@ for ZIP_PATH in ./acevo-server-manager*.zip; do
     if [ ! -f data/config.yml ] || [ ! -s data/config.yml ]; then
         echo "==> Seeding data/config.yml from ${DEST_ZIP}"
         unzip -p "$DEST_ZIP" linux/config.yml > data/config.yml
+        echo "==> Generating a random http.session_key"
+        SESSION_KEY="$(generate_secret)"
+        sed -i "s/^\(\s*session_key:\).*/\1 ${SESSION_KEY}/" data/config.yml
+        SESSION_KEY_GENERATED=1
     fi
 done
 shopt -u nullglob
 
 if [ -n "$LATEST_VERSION" ]; then
     echo "==> Setting ACEVO_VERSION=${LATEST_VERSION} in .env"
-    if grep -q '^ACEVO_VERSION=' .env; then
-        sed -i "s/^ACEVO_VERSION=.*/ACEVO_VERSION=${LATEST_VERSION}/" .env
-    else
-        echo "ACEVO_VERSION=${LATEST_VERSION}" >> .env
-    fi
+    set_env_var ACEVO_VERSION "$LATEST_VERSION"
 elif [ ! -f data/config.yml ] || [ ! -s data/config.yml ]; then
     echo "==> No acevo-server-manager_*.zip found alongside this script - skipping release placement."
     echo "    Once you've downloaded one, re-run this script (or use ./update.sh) to pick it up."
 fi
 
 echo ""
-echo "==> Done. Remaining manual steps:"
-echo "  1. Review data/config.yml: set http.session_key to a random secret."
-echo "  2. Fill in .env: TZ, and STEAM_USER/STEAM_PASS if anonymous steamcmd login"
-echo "     doesn't work for downloading the game server."
-echo "  3. docker compose up -d"
+echo "==> Done. Remaining steps:"
+STEP=1
+if [ "$SESSION_KEY_GENERATED" != "1" ]; then
+    echo "  ${STEP}. Review data/config.yml: set http.session_key to a random secret."
+    STEP=$((STEP + 1))
+fi
+if [ "$ENV_PROMPTED" != "1" ]; then
+    echo "  ${STEP}. Fill in .env: TZ, and STEAM_USER/STEAM_PASS if anonymous steamcmd login"
+    echo "     doesn't work for downloading the game server."
+    STEP=$((STEP + 1))
+fi
+echo "  ${STEP}. docker compose up -d"
 echo "     docker compose logs -f acevo-server-manager"
 echo ""
 echo "See README-docker.md (fetched as part of the repo, or view it on GitHub) for full details."

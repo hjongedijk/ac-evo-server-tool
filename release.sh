@@ -10,7 +10,7 @@
 #
 # "next" (default) auto-computes the next version from the latest
 # "v*" git tag, rolling PATCH over into MINOR at 99:
-# v1.0.99 -> v1.1.00 -> ... indefinitely. Pass an explicit
+# v1.0.99 -> v1.1.0 -> ... indefinitely. Pass an explicit
 # version to override this (e.g. for a MAJOR bump or an -rc suffix). You can
 # pass it with or without the "v" prefix - it's added automatically
 # if missing.
@@ -49,7 +49,7 @@ next_version() {
   else
     patch=$((patch + 1))
   fi
-  printf "%s%d.%d.%02d\n" "$PREFIX" "$major" "$minor" "$patch"
+  printf "%s%d.%d.%d\n" "$PREFIX" "$major" "$minor" "$patch"
 }
 
 if [[ "$RAW_VERSION" == "next" ]]; then
