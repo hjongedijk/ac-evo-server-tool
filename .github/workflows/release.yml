@@ -93,9 +93,8 @@ jobs:
           # present in this repo anyway, but skip the folder entirely too).
           zip -r "dist/acsm-evo-tooling-${GITHUB_REF_NAME}.zip" \
             bin/ \
-            install.sh \
+            acsm-evo-control.sh \
             release.sh \
-            update.sh \
             docker-compose.yml \
             docker-compose.dev.yml \
             .env.example \

@@ -19,16 +19,16 @@ services:
       # Game server ports - these MUST match what's shown on each server's
       # "Server Options" page in the web UI (server_tcp/udp_listener_port and
       # server_http_port). The manager assigns 9800 (TCP+UDP) and 9801 (TCP)
-      # to the first server by default. Nothing here is auto-discovered -
-      # every server needs its own pair of lines added below (and its own
-      # port forwarded at the router/firewall level), or its traffic simply
-      # never reaches the container. Restart (`docker compose up -d`) after
-      # editing this list.
+      # to the first server by default, then +2 per additional server
+      # (9802/9803, 9804/9805, ...). Nothing here is auto-discovered - every
+      # server needs its own pair of lines added below (and its own port
+      # forwarded at the router/firewall level), or its traffic simply never
+      # reaches the container. `./acsm-evo-control.sh add-server` does this
+      # for you automatically; restart (`docker compose up -d`) after
+      # editing this list by hand.
       - "9800:9800/udp"     # server 1 (default)
       - "9800:9800/tcp"
       - "9801:9801/tcp"
-      # additional-server-ports-marker (install.sh replaces this automatically
-      # based on how many servers you ask for; safe to edit by hand too)
       # - "9802:9802/udp"   # server 2 - uncomment and match the UI's ports
       # - "9802:9802/tcp"
       # - "9803:9803/tcp"

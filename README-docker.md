@@ -21,8 +21,9 @@ built) never contains the proprietary `acevo-server-manager` binary — that
 can't be redistributed. Instead, the image is just Wine + steamcmd + the
 entrypoint logic, and the actual version-specific binary is mounted in at
 container **runtime** from your own `releases/<version>/` folder — either as
-the untouched release `.zip` (auto-extracted on every container start, no
-manual unzipping needed) or as a pre-extracted `linux/` folder if you prefer.
+the untouched release `.zip` (auto-extracted on first start and whenever it
+changes, skipped on later restarts, no manual unzipping needed) or as a
+pre-extracted `linux/` folder if you prefer.
 This is what makes it safe to publish the image publicly, and as a bonus it
 means switching manager versions no longer requires a rebuild at all — just
 change `ACEVO_VERSION` in `.env` and restart.
@@ -39,8 +40,7 @@ acsm-evo/
 ├── TOOLING_VERSION               <- current tooling version, updated by release.sh
 ├── README.md
 ├── README-docker.md
-├── install.sh                    <- run this first, for first-time setup scaffolding
-├── update.sh                     <- run this to install a new manager release
+├── acsm-evo-control.sh           <- install, update, add servers - everything, one tool
 ├── release.sh                    <- run this to cut a new tooling release
 ├── bin/
 │   ├── Dockerfile
@@ -55,28 +55,30 @@ acsm-evo/
 └── data/                         <- persistent, never touched by upgrades
     ├── config.yml
     ├── ACEVO.License
-    ├── server/
-    └── store.json/                  <- directory, not a file (see step 5)
+    ├── server/                      <- steamcmd-downloaded game files + one
+    │                                    working copy per server (server_0/, server_1/, ...)
+    └── store.json/                  <- manager's own store; directory, not a file (see step 4)
 ```
 
 ## First-time setup
 
-### Fastest path: `install.sh`
+### Fastest path: `acsm-evo-control.sh install`
 
-You only need to provide three files: the installer itself, your manager
-release zip, and your license. Everything else is fetched from this repo:
+You only need to provide three files: the control script itself, your
+manager release zip, and your license. Everything else is fetched from this
+repo:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/hjongedijk/ac-evo-server-tool/main/install.sh
-chmod +x install.sh
-# now put acevo-server-manager_vX.Y.Z.zip and ACEVO.License next to install.sh
-./install.sh
+curl -fsSLO https://raw.githubusercontent.com/hjongedijk/ac-evo-server-tool/main/acsm-evo-control.sh
+chmod +x acsm-evo-control.sh
+# now put acevo-server-manager_vX.Y.Z.zip and ACEVO.License next to it
+./acsm-evo-control.sh install
 ```
 
-It fetches `docker-compose.yml`, `.env.example`, and `update.sh` from
-GitHub; creates the `data/`/`releases/` directories; moves your license and
-release zip into place (`data/ACEVO.License` and `releases/<version>/`);
-seeds `data/config.yml` from the zip with a **freshly generated random
+It fetches `docker-compose.yml` and `.env.example` from GitHub; creates the
+`data/`/`releases/` directories; moves your license and release zip into
+place (`data/ACEVO.License` and `releases/<version>/`); seeds
+`data/config.yml` from the zip with a **freshly generated random
 `http.session_key`**; and creates `.env` with `ACEVO_VERSION` already set to
 match. `.env.example` is deleted once it's no longer needed. It never
 overwrites a file that's already there, so it's safe to re-run (e.g. after
@@ -89,23 +91,24 @@ prompts you for:
 - **Steam login** for steamcmd — leave blank for anonymous (works fine for
   the AC EVO dedicated server); only asks for the password if you gave a
   username.
-- **Number of game servers** you want to run — publishes the matching ports
-  in `docker-compose.yml` automatically (server 1: `9800`/`9800`/`9801`,
-  server 2: `9802`/`9802`/`9803`, and so on — the same scheme the manager
-  itself uses when you add a server in the web UI). You still need to
-  create each server in the UI and forward its ports at your
-  router/firewall, but you won't need to hand-edit `docker-compose.yml` for
-  the common case.
+- **Number of game servers** you want to run. If you ask for more than one
+  and a release zip was found, it does the *entire* rest for you: starts
+  the container, waits for the manager's first boot to finish, registers
+  each extra server directly with the manager and publishes its ports (see
+  [Adding a server](#adding-a-server) below), then restarts once to pick
+  them all up — no web UI clicking required.
 
 Running non-interactively (no terminal attached), or just pressed Enter
 past a prompt? Nothing is lost — everything it would have asked stays at
 its single-server/UTC/anonymous default, and you can still change any of it
-by hand afterward: `docker compose up -d`.
+by hand afterward, or with `./acsm-evo-control.sh add-server` once it's up:
+`docker compose up -d`.
 
 ### Doing it manually (full repo checkout)
 
 If you'd rather clone the repo (e.g. to use `docker-compose.dev.yml`, or to
-patch something), here's what `install.sh` automates, spelled out:
+patch something), here's what `acsm-evo-control.sh install` automates,
+spelled out:
 
 **1. Set up your `.env`:**
 ```bash
@@ -162,22 +165,18 @@ account, fill in `STEAM_USER`/`STEAM_PASS` in `.env`; Steam Guard/2FA
 accounts need one interactive run first:
 `docker compose run --rm acevo-server-manager`.
 
-**6. Game server ports** — the manager assigns these per-server via its own
-web UI ("Server Options" page), not `config.yml`. Whatever port it shows
-there must match the compose file's `ports:` section — the first server
-defaulted to `9800` (TCP+UDP) and `9801` (TCP).
-
-This mapping is **not automatic** — nothing in the container discovers new
-servers and opens their ports for you. If you add a second (or third)
-server in the UI, it gets its own port pair, and that traffic won't reach
-the container at all until you add a matching block to `ports:` in
-`docker-compose.yml` (there are commented-out example lines for a second
-server already there) and restart with `docker compose up -d`. Do this for
-every server you add, and make sure each port is forwarded from your public
-IP at the router/firewall level too — the game's backend does an external
-UDP reachability check and will shut the server down if it can't reach it
-from outside. None of this touches `bin/Dockerfile` — its `EXPOSE` lines
-are documentation only and don't publish anything themselves.
+**6. Game server ports** — each server has its own TCP+UDP port pair, and
+that traffic won't reach the container at all until it's published in
+`docker-compose.yml`'s `ports:` section and the container is restarted.
+`./acsm-evo-control.sh add-server` (see
+[Adding a server](#adding-a-server) below) does this for you automatically
+using the same scheme the manager itself uses (server 1: `9800`/`9800`/`9801`,
+server 2: `9802`/`9802`/`9803`, and so on) — nothing to hand-edit for the
+common case. Whatever port a server ends up on must also be forwarded from
+your public IP at the router/firewall level — the game's backend does an
+external UDP reachability check and will shut the server down if it can't
+reach it from outside. None of this touches `bin/Dockerfile` — its `EXPOSE`
+lines are documentation only and don't publish anything themselves.
 
 **7. Run it:**
 ```bash
@@ -193,39 +192,82 @@ docker compose logs -f acevo-server-manager
 Visit `http://<host>:8773` — default login `admin` / `servermanager`, change
 immediately.
 
-## Updating to a new manager release
+## Managing your deployment
+
+`acsm-evo-control.sh` handles everything after first-time setup too. Run it
+with no arguments for a colored interactive menu, or use a subcommand
+directly. All of these assume setup is already done (they operate on
+`data/`, `releases/`, `docker-compose.yml`, `.env` already in place) and
+exit with an error telling you to run `install` first if it isn't.
+
+Don't have the script on hand (e.g. you only kept `docker-compose.yml` and
+`.env`, not the full checkout)? It's also baked into the published image —
+pull it back out:
+```bash
+docker compose cp acevo-server-manager:/opt/acsm-evo-control.sh ./acsm-evo-control.sh
+chmod +x acsm-evo-control.sh
+```
+
+### Adding a server
+
+```bash
+./acsm-evo-control.sh add-server
+```
+
+Prompts for a name, max players, and optional driver/admin passwords, then
+registers the server **directly with the manager** — no web UI clicking
+needed. Concretely, it:
+1. Picks the next server index (`server_1`, `server_2`, ...) by scanning
+   `data/store.json/servers/`.
+2. Writes that server's config directly into
+   `data/store.json/servers/server_N/` (`serverOptions.json`,
+   `perServerOptions.json`, `notifications.json`) and a matching
+   `server_config.json` under `data/server/_manager/servers/server_N/`.
+3. Copies that server's game-file working copy from `server_0` (a straight
+   file copy of static content — car/track data, the server executable —
+   the same ~400MB per server the manager itself creates when you add one
+   via the UI).
+4. Publishes its ports in `docker-compose.yml` (same scheme as first-time
+   setup: `9800`/`9800`/`9801` for server 1, `+2` per additional server).
+
+This is possible because the manager just scans `data/store.json/servers/`
+for `server_N` directories at startup — it's not an officially documented
+API, but it's exactly what the web UI's "new server" flow produces, and
+it's been verified end-to-end against a real multi-server deployment. A
+server added this way only shows up after a restart:
+```bash
+docker compose up -d
+```
+Requires the container to have started and fully booted **at least once**
+already (`add-server` needs `server_0`'s files as a template — it errors
+out with a clear message if they're not there yet). Remember to forward
+the new server's ports at your router/firewall too.
+
+### Updating the manager release
 
 When Emperor Servers ships a new version:
 
 ```bash
-./update.sh /path/to/acevo-server-manager_v1.6.4.zip
+./acsm-evo-control.sh update-manager /path/to/acevo-server-manager_v1.6.4.zip
 ```
 
-Don't have `update.sh` on hand (e.g. you only have `docker-compose.yml` and
-`.env`, not the full repo/zip)? It's also baked into the published image —
-pull it back out:
-```bash
-docker compose cp acevo-server-manager:/opt/update.sh ./update.sh
-chmod +x update.sh
-```
-
-This works from anywhere — it locates the repo root automatically, copies
-the zip as-is into `releases/v1.6.4/` (no extraction — the container does
-that automatically on start), updates `.env` to point at it, and
-**restarts** the container (no rebuild, since the version lives in a volume
-mount, not the image). Your `data/` folder (config, license, downloaded game
-server, database) is never touched.
+This locates the repo root automatically, moves the zip as-is into
+`releases/v1.6.4/` (no extraction — the container does that automatically
+on start), updates `.env` to point at it, and **restarts** the container
+(no rebuild, since the version lives in a volume mount, not the image).
+Your `data/` folder (config, license, downloaded game server, database, all
+servers) is never touched.
 
 Use `--dev` if you're running the local-build compose file instead:
 ```bash
-./update.sh /path/to/acevo-server-manager_v1.6.4.zip --dev
+./acsm-evo-control.sh update-manager /path/to/acevo-server-manager_v1.6.4.zip --dev
 ```
 
 Version numbers with a hotfix/build suffix (e.g. `v1.6.4-1`) are handled
 automatically. If a filename doesn't parse cleanly, pass the version
 explicitly:
 ```bash
-./update.sh acevo-server-manager_v1.6.4-1.zip v1.6.4-1
+./acsm-evo-control.sh update-manager acevo-server-manager_v1.6.4-1.zip v1.6.4-1
 ```
 
 The entrypoint also does a light check on every start: if the new release's
@@ -240,14 +282,38 @@ docker compose up -d
 ```
 (assuming the old release folder is still present under `releases/`).
 
-### Doing it manually (without update.sh)
-
+Doing it by hand instead:
 ```bash
 mkdir -p releases/v1.6.4
 cp acevo-server-manager_v1.6.4.zip releases/v1.6.4/
 sed -i 's/^ACEVO_VERSION=.*/ACEVO_VERSION=v1.6.4/' .env
 docker compose up -d
 ```
+
+### Updating game server files
+
+The game server files (downloaded via steamcmd, separate from the manager
+binary) already auto-update on every container start when
+`ACEVO_AUTO_UPDATE=1` is set (the default). To trigger that on demand
+without a full restart — or if you've turned auto-update off — re-run it
+directly:
+
+```bash
+./acsm-evo-control.sh update-game
+```
+
+This runs the exact same steamcmd command the entrypoint uses (anonymous or
+authenticated, based on `STEAM_USER`/`STEAM_PASS` in `.env`) inside the
+already-running container. Requires the container to be up.
+
+### Status
+
+```bash
+./acsm-evo-control.sh status
+```
+
+Read-only summary: current `ACEVO_VERSION`/`IMAGE_TAG`, every configured
+server with its name and ports, and `docker compose ps` output.
 
 ## Cutting a GitHub release of this tooling
 
@@ -325,4 +391,6 @@ version history stay reproducible even though the binaries live outside git.
   if an unrecognized zone name is given
 - The manager release (raw zip or pre-extracted `linux/` folder) is resolved
   and copied out of the read-only `/acevo/vendor-src` mount into a writable
-  location, with the binary `chmod +x`'d, on every container start
+  location on every container start, with the binary `chmod +x`'d - the
+  zip extraction step itself is skipped on restarts where it's already
+  extracted and unchanged
