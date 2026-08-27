@@ -4,6 +4,11 @@ services:
     # proprietary Emperor Servers code, so it's safe to build+publish
     # publicly via GitHub Actions.
     image: ghcr.io/hjongedijk/ac-evo-server-tool:${IMAGE_TAG:-latest}
+    # Always check for a newer image matching the tag before starting -
+    # without this, `docker compose up -d` silently reuses whatever's
+    # already cached locally, even if a newer ":latest" (or the same
+    # pinned version tag, rebuilt) has since been published.
+    pull_policy: always
     container_name: acevo-server-manager
     restart: unless-stopped
     env_file:
