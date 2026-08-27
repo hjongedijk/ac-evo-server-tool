@@ -124,6 +124,10 @@ else
     fi
 fi
 
+# .env is created (or already existed) - the template's only job was to seed
+# it, so it doesn't need to stick around in the deployment directory.
+rm -f .env.example
+
 # --- Manager release: pick up the zip you dropped alongside this script ---
 # Same filename -> version parsing as update.sh (handles both
 # "v1.6.4-1.zip" and "v1_6_4-1.zip" -> v1.6.4-1). If more than one zip is

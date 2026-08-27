@@ -1,7 +1,7 @@
 #!/bin/bash
 # Usage: ./update.sh /path/to/acevo-server-manager_v1_6_4.zip [version] [--dev]
 #
-# Copies a new release zip AS-IS into releases/<version>/ (no extraction
+# Moves a new release zip AS-IS into releases/<version>/ (no extraction
 # needed - the container extracts it automatically on start), updates .env
 # to point at it, and restarts the container. Your data/ folder (config,
 # license, game server files, store) is never touched.
@@ -85,10 +85,10 @@ mkdir -p "$DEST"
 
 DEST_ZIP="${DEST}/$(basename "$ZIP_PATH")"
 if [ -f "$DEST_ZIP" ]; then
-    echo "${DEST_ZIP} already exists - skipping copy."
+    echo "${DEST_ZIP} already exists - leaving ${ZIP_PATH} where it is."
 else
-    echo "Copying zip into ${DEST}/ (extraction happens automatically in the container)..."
-    cp "$ZIP_PATH" "$DEST_ZIP"
+    echo "Moving zip into ${DEST}/ (extraction happens automatically in the container)..."
+    mv "$ZIP_PATH" "$DEST_ZIP"
 fi
 
 echo "Updating .env to ACEVO_VERSION=${VERSION}"
