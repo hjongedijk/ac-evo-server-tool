@@ -52,12 +52,13 @@ acsm-evo/
 │       └── linux/                             <- OPTION B: pre-extracted (takes priority if present)
 │           ├── acevo-server-manager
 │           └── config.yml
-└── data/                         <- persistent, never touched by upgrades
-    ├── config.yml
-    ├── ACEVO.License
-    ├── server/                      <- steamcmd-downloaded game files + one
-    │                                    working copy per server (server_0/, server_1/, ...)
-    └── store.json/                  <- manager's own store; directory, not a file (see step 4)
+├── data/                         <- persistent, never touched by upgrades
+│   ├── config.yml
+│   ├── ACEVO.License
+│   ├── server/                      <- steamcmd-downloaded game files + one
+│   │                                    working copy per server (server_0/, server_1/, ...)
+│   └── store.json/                  <- manager's own store; directory, not a file (see step 4)
+└── backups/                      <- created by `backup`; gitignored, local only
 ```
 
 ## First-time setup
@@ -312,6 +313,86 @@ directly:
 This runs the exact same steamcmd command the entrypoint uses (anonymous or
 authenticated, based on `STEAM_USER`/`STEAM_PASS` in `.env`) inside the
 already-running container. Requires the container to be up.
+
+### Renaming, removing, and moving servers
+
+```bash
+./acsm-evo-control.sh rename-server [id] ["New Name"]
+./acsm-evo-control.sh remove-server [id]
+./acsm-evo-control.sh set-port [id] [new-port]
+```
+
+- **`rename-server`** changes just the display name, leaving max
+  players/passwords untouched.
+- **`remove-server`** permanently deletes a server's store entry, game-file
+  copy, and its published ports. `server_0` can't be removed this way
+  (it's the manager's primary server) — use `rename-server` to repurpose it
+  instead.
+- **`set-port`** moves an existing server to a different TCP+UDP port pair
+  (the web port becomes `port + 1`), updating its store entry, generated
+  `server_config.json` if present, and `docker-compose.yml` to match, and
+  refuses to reuse a port already claimed by another server.
+
+All three restart-to-apply, same as `add-server`: `docker compose up -d`.
+
+### Backups
+
+```bash
+./acsm-evo-control.sh backup
+./acsm-evo-control.sh restore [file]
+```
+
+`backup` snapshots the manager's own state to `backups/backup-<timestamp>.tar.gz`:
+`data/store.json` (accounts, servers, championships, presets, results
+database), `data/config.yml`, `data/ACEVO.License`, every server's
+`results/`, plus `docker-compose.yml` and `.env`. It deliberately leaves out
+the ~400MB/server game-file copies (re-creatable via `add-server`'s
+template-copy step) and the base steamcmd download (re-fetchable via
+`update-game`), so backups stay small and fast.
+
+`restore` backs up the *current* state first (so a bad restore can itself
+be undone), then extracts the chosen backup over it. Restart to apply:
+`docker compose up -d`. `backups/` is gitignored — treat it as local,
+untracked state.
+
+### Doctor
+
+```bash
+./acsm-evo-control.sh doctor
+```
+
+Sanity-checks the deployment: Docker/Compose availability, `pull_policy:
+always` present, `.env`/license/config files present and non-empty, Steam
+credentials set, whether the running container matches the locally cached
+image for your `IMAGE_TAG` (catches the exact "stale image" issue this
+tooling hit during development), and that every configured server has a
+store entry.
+
+### Self-update
+
+```bash
+./acsm-evo-control.sh self-update
+```
+
+Replaces this script in place with the latest version from GitHub (same
+ref-resolution as `install` — latest release tag, falling back to `main`).
+
+### Rotating the session secret
+
+```bash
+./acsm-evo-control.sh rotate-secret
+```
+
+Generates a fresh `http.session_key` in `data/config.yml`. This logs out
+every active admin session but changes nothing else. Restart to apply.
+
+### Logs
+
+```bash
+./acsm-evo-control.sh logs
+```
+
+Shortcut for `docker compose logs -f acevo-server-manager`.
 
 ### Status
 

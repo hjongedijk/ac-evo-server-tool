@@ -316,11 +316,7 @@ cmd_rename_server() {
     local id="${1:-}" name="${2:-}"
     if [ -z "$id" ] && [ -t 0 ]; then
         echo "${C_BOLD}Existing servers:${C_RESET}"
-        local d
-        for d in data/store.json/servers/server_*; do
-            [ -d "$d" ] || continue
-            echo "  $(basename "$d"): \"$(grep -oP '"server_name":"\K[^"]*' "$d/serverOptions.json" 2>/dev/null)\""
-        done
+        list_servers
         read -r -p "Server id to rename (e.g. server_0): " id
     fi
     if [ -z "$id" ] || [ ! -f "data/store.json/servers/${id}/serverOptions.json" ]; then
@@ -338,6 +334,140 @@ cmd_rename_server() {
     set_server_name "$id" "$name"
     echo ""
     success "${id} renamed to \"${name}\". Restart to apply: docker compose up -d"
+}
+
+# List every configured server as "server_N: "Name" - port P". Used by
+# rename-server/remove-server/set-port's interactive prompts.
+list_servers() {
+    local d
+    for d in data/store.json/servers/server_*; do
+        [ -d "$d" ] || continue
+        local name port
+        name=$(grep -oP '"server_name":"\K[^"]*' "$d/serverOptions.json" 2>/dev/null)
+        port=$(grep -oP '"server_tcp_listener_port":\K[0-9]+' "$d/serverOptions.json" 2>/dev/null)
+        echo "  $(basename "$d"): \"${name}\" - port ${port}"
+    done
+}
+
+# ============================================================================
+# remove-server - permanently delete a server's store entry, game-file
+# copy, and its published ports. server_0 can't be removed here since it's
+# the manager's primary/first server - reconfigure it with rename-server
+# instead.
+# ============================================================================
+cmd_remove_server() {
+    require_setup_done
+
+    local id="${1:-}"
+    if [ -z "$id" ] && [ -t 0 ]; then
+        echo "${C_BOLD}Existing servers:${C_RESET}"
+        list_servers
+        read -r -p "Server id to remove (e.g. server_2): " id
+    fi
+    if [ -z "$id" ] || [ ! -d "data/store.json/servers/${id}" ]; then
+        error "No such server: '${id}'"
+        exit 1
+    fi
+    if [ "$id" = "server_0" ]; then
+        error "server_0 can't be removed - it's the manager's primary server."
+        echo "Rename/reconfigure it instead: $0 rename-server server_0" >&2
+        exit 1
+    fi
+
+    local name
+    name=$(grep -oP '"server_name":"\K[^"]*' "data/store.json/servers/${id}/serverOptions.json" 2>/dev/null)
+    if [ -t 0 ]; then
+        local confirm
+        read -r -p "Remove ${id} (\"${name}\") and all its data/results permanently? [y/N]: " confirm
+        if ! [[ "$confirm" =~ ^[Yy]$ ]]; then
+            echo "Cancelled."
+            exit 0
+        fi
+    fi
+
+    local port
+    port=$(grep -oP '"server_tcp_listener_port":\K[0-9]+' "data/store.json/servers/${id}/serverOptions.json" 2>/dev/null)
+    rm -rf "data/store.json/servers/${id}" "data/server/_manager/servers/${id}"
+    if [ -n "$port" ]; then
+        local http=$((port + 1))
+        sed -i "\|\"${port}:${port}/udp\"|d; \|\"${port}:${port}/tcp\"|d; \|\"${http}:${http}/tcp\"|d" docker-compose.yml
+    fi
+
+    echo ""
+    success "${id} removed. Restart to apply: docker compose up -d"
+}
+
+# ============================================================================
+# set-port - move an existing server to a different port pair, updating its
+# store entry, generated server_config.json (if present), and
+# docker-compose.yml's published ports to match.
+# ============================================================================
+cmd_set_port() {
+    require_setup_done
+
+    local id="${1:-}" new_port="${2:-}"
+    if [ -z "$id" ] && [ -t 0 ]; then
+        echo "${C_BOLD}Existing servers:${C_RESET}"
+        list_servers
+        read -r -p "Server id to move (e.g. server_1): " id
+    fi
+    if [ -z "$id" ] || [ ! -f "data/store.json/servers/${id}/serverOptions.json" ]; then
+        error "No such server: '${id}'"
+        exit 1
+    fi
+    if [ -z "$new_port" ] && [ -t 0 ]; then
+        read -r -p "New TCP+UDP port (the web port will be new_port+1): " new_port
+    fi
+    if ! [[ "$new_port" =~ ^[0-9]+$ ]]; then
+        error "'${new_port}' isn't a valid port number."
+        exit 1
+    fi
+    if grep -rq "\"server_tcp_listener_port\":${new_port}\b" data/store.json/servers/*/serverOptions.json 2>/dev/null; then
+        error "Port ${new_port} is already used by another server."
+        exit 1
+    fi
+
+    local old_port old_http new_http
+    old_port=$(grep -oP '"server_tcp_listener_port":\K[0-9]+' "data/store.json/servers/${id}/serverOptions.json")
+    old_http=$((old_port + 1))
+    new_http=$((new_port + 1))
+
+    local opts="data/store.json/servers/${id}/serverOptions.json"
+    sed -i \
+        -e "s/\"server_tcp_listener_port\":[0-9]*/\"server_tcp_listener_port\":${new_port}/" \
+        -e "s/\"server_udp_listener_port\":[0-9]*/\"server_udp_listener_port\":${new_port}/" \
+        -e "s/\"server_tcp_internal_port\":[0-9]*/\"server_tcp_internal_port\":${new_port}/" \
+        -e "s/\"server_udp_internal_port\":[0-9]*/\"server_udp_internal_port\":${new_port}/" \
+        -e "s/\"server_http_port\":[0-9]*/\"server_http_port\":${new_http}/" \
+        "$opts"
+
+    local cfg="data/server/_manager/servers/${id}/server_config.json"
+    if [ -f "$cfg" ]; then
+        sed -i \
+            -e "s/\"server_tcp_listener_port\": [0-9]*/\"server_tcp_listener_port\": ${new_port}/" \
+            -e "s/\"server_udp_listener_port\": [0-9]*/\"server_udp_listener_port\": ${new_port}/" \
+            -e "s/\"server_tcp_internal_port\": [0-9]*/\"server_tcp_internal_port\": ${new_port}/" \
+            -e "s/\"server_udp_internal_port\": [0-9]*/\"server_udp_internal_port\": ${new_port}/" \
+            -e "s/\"server_http_port\": [0-9]*/\"server_http_port\": ${new_http}/" \
+            "$cfg"
+    fi
+
+    sed -i "\|\"${old_port}:${old_port}/udp\"|d; \|\"${old_port}:${old_port}/tcp\"|d; \|\"${old_http}:${old_http}/tcp\"|d" docker-compose.yml
+    local block
+    block=$(printf '%s\n%s\n%s' \
+        "      - \"${new_port}:${new_port}/udp\"     # ${id}" \
+        "      - \"${new_port}:${new_port}/tcp\"" \
+        "      - \"${new_http}:${new_http}/tcp\"")
+    awk -v block="$block" '
+        /^    volumes:/ && !done { print block; done=1 }
+        { print }
+    ' docker-compose.yml > docker-compose.yml.tmp
+    mv docker-compose.yml.tmp docker-compose.yml
+
+    echo ""
+    success "${id} moved from ${old_port}/${old_http} to ${new_port}/${new_http}."
+    echo "Restart to apply: docker compose up -d"
+    echo "Forward the new ports at your router/firewall too."
 }
 
 # ============================================================================
@@ -717,6 +847,199 @@ cmd_status() {
     fi
 }
 
+# ============================================================================
+# backup - snapshot the manager's own state (not the ~400MB/server game
+# content, which is re-creatable via add-server, or the base steamcmd
+# download, which update-game re-fetches): store.json (accounts, servers,
+# championships, presets, results database), config.yml, ACEVO.License,
+# every server's results/, plus docker-compose.yml and .env.
+# ============================================================================
+cmd_backup() {
+    require_setup_done
+    mkdir -p backups
+    local ts dest
+    ts=$(date +%Y%m%d-%H%M%S)
+    dest="backups/backup-${ts}.tar.gz"
+
+    local -a results_dirs=()
+    local d
+    shopt -s nullglob
+    for d in data/server/_manager/servers/*/results; do
+        results_dirs+=("$d")
+    done
+    shopt -u nullglob
+
+    local -a targets=(data/store.json data/config.yml docker-compose.yml)
+    [ -s data/ACEVO.License ] && targets+=(data/ACEVO.License)
+    [ -f .env ] && targets+=(.env)
+    targets+=("${results_dirs[@]}")
+
+    tar czf "$dest" "${targets[@]}"
+    success "Backup saved to ${dest} ($(du -h "$dest" | cut -f1))"
+}
+
+# ============================================================================
+# restore - restore a backup made by `backup` above. Backs up current state
+# first, so a bad restore can itself be undone.
+# ============================================================================
+cmd_restore() {
+    require_setup_done
+
+    local tarball="${1:-}"
+    if [ -z "$tarball" ] && [ -t 0 ]; then
+        echo "${C_BOLD}Available backups:${C_RESET}"
+        ls -1t backups/*.tar.gz 2>/dev/null || echo "  (none yet)"
+        read -r -p "Backup file to restore: " tarball
+    fi
+    if [ -z "$tarball" ] || [ ! -f "$tarball" ]; then
+        error "No such backup file: '${tarball}'"
+        exit 1
+    fi
+    if [ -t 0 ]; then
+        local confirm
+        read -r -p "This overwrites current server data/config with the backup. Continue? [y/N]: " confirm
+        if ! [[ "$confirm" =~ ^[Yy]$ ]]; then
+            echo "Cancelled."
+            exit 0
+        fi
+    fi
+
+    log "Backing up current state first, just in case..."
+    cmd_backup
+
+    log "Restoring from ${tarball}..."
+    tar xzf "$tarball"
+    echo ""
+    success "Restored. Restart to apply: docker compose up -d"
+}
+
+# ============================================================================
+# doctor - sanity-check the deployment for the kinds of issues that have
+# bitten this tool before (stale cached image, missing credentials, etc).
+# ============================================================================
+cmd_doctor() {
+    echo "${C_BOLD}=== acsm-evo-control doctor ===${C_RESET}"
+    local issues=0
+    ok()   { echo "  ${C_GREEN}[OK]${C_RESET}   $1"; }
+    bad()  { echo "  ${C_RED}[FAIL]${C_RESET} $1"; issues=$((issues + 1)); }
+    warnd() { echo "  ${C_YELLOW}[WARN]${C_RESET} $1"; issues=$((issues + 1)); }
+
+    if command -v docker >/dev/null 2>&1; then ok "docker installed"; else bad "docker not found"; fi
+    if docker compose version >/dev/null 2>&1; then ok "docker compose available"; else bad "docker compose not available"; fi
+    if [ -f docker-compose.yml ]; then
+        ok "docker-compose.yml present"
+        if grep -q "pull_policy: always" docker-compose.yml; then
+            ok "pull_policy: always set (docker compose up -d will fetch new images)"
+        else
+            warnd "pull_policy: always missing - docker compose up -d may silently reuse a stale cached image"
+        fi
+    else
+        bad "docker-compose.yml missing"
+    fi
+    if [ -f .env ]; then
+        ok ".env present"
+        local su sp
+        su=$(grep '^STEAM_USER=' .env 2>/dev/null | cut -d= -f2-)
+        sp=$(grep '^STEAM_PASS=' .env 2>/dev/null | cut -d= -f2-)
+        if [ -n "$su" ] && [ -n "$sp" ]; then
+            ok "Steam credentials set"
+        else
+            warnd "STEAM_USER/STEAM_PASS blank - anonymous login fails for this app"
+        fi
+    else
+        bad ".env missing - run: $0 install"
+    fi
+    if [ -s data/ACEVO.License ]; then ok "data/ACEVO.License present and non-empty"; else bad "data/ACEVO.License missing or empty"; fi
+    if [ -s data/config.yml ]; then ok "data/config.yml present"; else bad "data/config.yml missing - run: $0 install"; fi
+
+    if command -v docker >/dev/null 2>&1 && [ -f .env ]; then
+        local image_tag running_id local_id
+        image_tag=$(grep '^IMAGE_TAG=' .env 2>/dev/null | cut -d= -f2-)
+        image_tag="${image_tag:-latest}"
+        running_id=$(docker inspect acevo-server-manager --format '{{.Image}}' 2>/dev/null || true)
+        local_id=$(docker inspect "ghcr.io/hjongedijk/ac-evo-server-tool:${image_tag}" --format '{{.Id}}' 2>/dev/null || true)
+        if [ -n "$running_id" ] && [ -n "$local_id" ]; then
+            if [ "$running_id" = "$local_id" ]; then
+                ok "running container matches locally cached :${image_tag} image"
+            else
+                warnd "running container is on a different image than locally cached :${image_tag} - docker compose pull && docker compose up -d"
+            fi
+        elif [ -z "$running_id" ]; then
+            warnd "container isn't running - docker compose up -d"
+        fi
+    fi
+
+    if [ -d data/store.json/servers ]; then
+        local d
+        for d in data/store.json/servers/server_*; do
+            [ -d "$d" ] || continue
+            if [ -f "$d/serverOptions.json" ]; then
+                ok "$(basename "$d")/serverOptions.json present"
+            else
+                bad "$(basename "$d")/serverOptions.json missing"
+            fi
+        done
+    fi
+
+    echo ""
+    if [ "$issues" -eq 0 ]; then
+        success "No issues found."
+    else
+        warn "${issues} issue(s) found - see above."
+    fi
+}
+
+# ============================================================================
+# self-update - replace this script with the latest version from GitHub.
+# Downloads to a temp file and moves it over the running script (mv/rename
+# is safe to do to an already-executing script; in-place rewriting isn't).
+# ============================================================================
+cmd_self_update() {
+    log "Checking for a newer version of acsm-evo-control.sh..."
+    local ref
+    ref=$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" 2>/dev/null \
+        | grep -m1 '"tag_name"' | grep -oP '(?<=": ")[^"]+') || true
+    ref="${ref:-main}"
+    local tmp
+    tmp="$(mktemp)"
+    if ! curl -fsSL "https://raw.githubusercontent.com/${GITHUB_REPO}/${ref}/acsm-evo-control.sh" -o "$tmp"; then
+        rm -f "$tmp"
+        error "Failed to fetch the latest version."
+        exit 1
+    fi
+    chmod +x "$tmp"
+    mv "$tmp" "$0"
+    success "Updated to ${ref}."
+}
+
+# ============================================================================
+# logs - shortcut for tailing the container's logs.
+# ============================================================================
+cmd_logs() {
+    require_setup_done
+    docker compose logs -f acevo-server-manager
+}
+
+# ============================================================================
+# rotate-secret - generate a fresh http.session_key. Invalidates active
+# admin sessions (everyone gets logged out) but nothing else.
+# ============================================================================
+cmd_rotate_secret() {
+    require_setup_done
+    if [ -t 0 ]; then
+        local confirm
+        read -r -p "This logs out all active admin sessions. Continue? [y/N]: " confirm
+        if ! [[ "$confirm" =~ ^[Yy]$ ]]; then
+            echo "Cancelled."
+            exit 0
+        fi
+    fi
+    local secret
+    secret=$(generate_secret)
+    sed -i "s/^\(\s*session_key:\).*/\1 ${secret}/" data/config.yml
+    success "New http.session_key generated. Restart to apply: docker compose up -d"
+}
+
 cmd_help() {
     cat <<EOF
 Usage: $0 <command> [args]
@@ -727,6 +1050,14 @@ Commands:
   update-game                 Re-run steamcmd inside the running container to update game files
   add-server ["Name"]         Register a new server with the manager and publish its ports
   rename-server [id] [name]   Change an existing server's display name (e.g. server_0)
+  remove-server [id]          Permanently delete a server (not server_0) and its ports
+  set-port [id] [port]        Move a server to a different TCP+UDP port pair
+  backup                      Snapshot store.json/config/license/results/.env to backups/
+  restore [file]              Restore a backup made by 'backup' (backs up current state first)
+  doctor                      Sanity-check the deployment (image freshness, credentials, files)
+  self-update                 Replace this script with the latest version from GitHub
+  logs                        Tail the running container's logs
+  rotate-secret               Generate a fresh http.session_key (logs out active admin sessions)
   status                      Show current version, configured servers, and container state
   help                        Show this message
 
@@ -736,16 +1067,24 @@ EOF
 
 cmd_menu() {
     banner
-    echo "  ${C_BOLD}1)${C_RESET} Install / first-time setup"
-    echo "  ${C_BOLD}2)${C_RESET} Update manager release"
-    echo "  ${C_BOLD}3)${C_RESET} Update game server files (steamcmd)"
-    echo "  ${C_BOLD}4)${C_RESET} Add a server"
-    echo "  ${C_BOLD}5)${C_RESET} Rename a server"
-    echo "  ${C_BOLD}6)${C_RESET} Show status"
-    echo "  ${C_BOLD}7)${C_RESET} Exit"
+    echo "  ${C_BOLD} 1)${C_RESET} Install / first-time setup"
+    echo "  ${C_BOLD} 2)${C_RESET} Update manager release"
+    echo "  ${C_BOLD} 3)${C_RESET} Update game server files (steamcmd)"
+    echo "  ${C_BOLD} 4)${C_RESET} Add a server"
+    echo "  ${C_BOLD} 5)${C_RESET} Rename a server"
+    echo "  ${C_BOLD} 6)${C_RESET} Remove a server"
+    echo "  ${C_BOLD} 7)${C_RESET} Move a server's port"
+    echo "  ${C_BOLD} 8)${C_RESET} Backup"
+    echo "  ${C_BOLD} 9)${C_RESET} Restore"
+    echo "  ${C_BOLD}10)${C_RESET} Doctor (sanity check)"
+    echo "  ${C_BOLD}11)${C_RESET} Self-update"
+    echo "  ${C_BOLD}12)${C_RESET} Tail logs"
+    echo "  ${C_BOLD}13)${C_RESET} Rotate session secret"
+    echo "  ${C_BOLD}14)${C_RESET} Show status"
+    echo "  ${C_BOLD}15)${C_RESET} Exit"
     echo ""
     local choice
-    read -r -p "Choice [1-7]: " choice
+    read -r -p "Choice [1-15]: " choice
     echo ""
     case "$choice" in
         1) cmd_install ;;
@@ -753,8 +1092,16 @@ cmd_menu() {
         3) cmd_update_game ;;
         4) cmd_add_server ;;
         5) cmd_rename_server ;;
-        6) cmd_status ;;
-        7) exit 0 ;;
+        6) cmd_remove_server ;;
+        7) cmd_set_port ;;
+        8) cmd_backup ;;
+        9) cmd_restore ;;
+        10) cmd_doctor ;;
+        11) cmd_self_update ;;
+        12) cmd_logs ;;
+        13) cmd_rotate_secret ;;
+        14) cmd_status ;;
+        15) exit 0 ;;
         *) error "Unknown choice."; exit 1 ;;
     esac
 }
@@ -768,6 +1115,14 @@ case "${1:-}" in
     update-game) shift; cmd_update_game "$@" ;;
     add-server) shift; cmd_add_server "$@" ;;
     rename-server) shift; cmd_rename_server "$@" ;;
+    remove-server) shift; cmd_remove_server "$@" ;;
+    set-port) shift; cmd_set_port "$@" ;;
+    backup) shift; cmd_backup "$@" ;;
+    restore) shift; cmd_restore "$@" ;;
+    doctor) shift; cmd_doctor "$@" ;;
+    self-update) shift; cmd_self_update "$@" ;;
+    logs) shift; cmd_logs "$@" ;;
+    rotate-secret) shift; cmd_rotate_secret "$@" ;;
     status) shift; cmd_status "$@" ;;
     help|-h|--help) cmd_help ;;
     "") cmd_menu ;;

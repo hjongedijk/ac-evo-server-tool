@@ -1,5 +1,6 @@
 # Runtime/persistent data - never commit, this is your live server state
 data/
+backups/
 
 # Contains Steam credentials + local settings - copy from .env.example
 .env

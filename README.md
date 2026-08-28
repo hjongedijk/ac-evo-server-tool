@@ -57,8 +57,15 @@ too — run it with no arguments for an interactive menu, or use it directly:
 ./acsm-evo-control.sh add-server         # register a new server with the
                                           # manager and publish its ports -
                                           # no web UI needed
+./acsm-evo-control.sh rename-server      # change a server's display name
+./acsm-evo-control.sh remove-server      # delete a server and its ports
+./acsm-evo-control.sh set-port           # move a server to a different port
 ./acsm-evo-control.sh update-manager /path/to/acevo-server-manager_v1.6.4.zip
 ./acsm-evo-control.sh update-game        # re-run steamcmd to update game files
+./acsm-evo-control.sh backup             # snapshot manager state to backups/
+./acsm-evo-control.sh restore            # restore a backup
+./acsm-evo-control.sh doctor             # sanity-check the deployment
+./acsm-evo-control.sh self-update        # update this script from GitHub
 ./acsm-evo-control.sh status             # show version, servers, container state
 ```
 
