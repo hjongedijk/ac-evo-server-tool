@@ -1,6 +1,9 @@
 # Runtime/persistent data - never commit, this is your live server state
 data/
 backups/
+templates/
+Caddyfile
+nginx-acsm-evo.conf
 
 # Contains Steam credentials + local settings - copy from .env.example
 .env

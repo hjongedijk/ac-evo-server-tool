@@ -52,6 +52,38 @@ EOF
 }
 
 # ============================================================================
+# Global flags: --dry-run (preview add-server/remove-server/set-port without
+# writing anything) and --host <user@host> (re-run this exact command over
+# SSH - assumes acsm-evo-control.sh already exists wherever that SSH session
+# lands, e.g. its home directory; fleet management across identical hosts).
+# Strip both out of "$@" before the real dispatch below sees it.
+# ============================================================================
+DRY_RUN=0
+HOST_TARGET=""
+_ARGS=()
+_next_is_host=0
+for _arg in "$@"; do
+    if [ "$_next_is_host" = "1" ]; then
+        HOST_TARGET="$_arg"
+        _next_is_host=0
+        continue
+    fi
+    case "$_arg" in
+        --dry-run) DRY_RUN=1 ;;
+        --host) _next_is_host=1 ;;
+        --host=*) HOST_TARGET="${_arg#--host=}" ;;
+        *) _ARGS+=("$_arg") ;;
+    esac
+done
+set -- "${_ARGS[@]+"${_ARGS[@]}"}"
+unset _ARGS _arg _next_is_host
+
+if [ -n "$HOST_TARGET" ]; then
+    log "Running on ${HOST_TARGET} via SSH..."
+    exec ssh -t "$HOST_TARGET" "./acsm-evo-control.sh $(printf '%q ' "$@")"
+fi
+
+# ============================================================================
 # Shared helpers
 # ============================================================================
 
@@ -167,6 +199,33 @@ wait_for_container_ready() {
 cmd_add_server() {
     require_setup_done
 
+    local template_name="" _rest=() _tmpl_next=0
+    local _arg
+    for _arg in "$@"; do
+        if [ "$_tmpl_next" = "1" ]; then
+            template_name="$_arg"
+            _tmpl_next=0
+            continue
+        fi
+        case "$_arg" in
+            --from-template=*) template_name="${_arg#--from-template=}" ;;
+            --from-template) _tmpl_next=1 ;;
+            *) _rest+=("$_arg") ;;
+        esac
+    done
+    set -- "${_rest[@]+"${_rest[@]}"}"
+    local tmpl_players="" tmpl_driver="" tmpl_admin=""
+    if [ -n "$template_name" ]; then
+        local tf="templates/${template_name}.json"
+        if [ ! -f "$tf" ]; then
+            error "No such template: '${template_name}' (looked for ${tf})"
+            exit 1
+        fi
+        tmpl_players=$(grep -oP '"max_players":\K[0-9]+' "$tf")
+        tmpl_driver=$(grep -oP '"driver_password":"\K[^"]*' "$tf")
+        tmpl_admin=$(grep -oP '"admin_password":"\K[^"]*' "$tf")
+    fi
+
     local next_idx=0
     while [ -d "data/store.json/servers/server_${next_idx}" ]; do
         next_idx=$((next_idx + 1))
@@ -190,23 +249,43 @@ cmd_add_server() {
     local port=$((9800 + next_idx * 2))
     local http=$((port + 1))
 
-    local name="${1:-}" players="${2:-16}" driver_pass="${3:-}" admin_pass="${4:-}"
+    local name="${1:-}" players="${2:-}" driver_pass="${3:-}" admin_pass="${4:-}"
+    if [ -n "$template_name" ]; then
+        players="${players:-$tmpl_players}"
+        driver_pass="${driver_pass:-$tmpl_driver}"
+        admin_pass="${admin_pass:-$tmpl_admin}"
+    fi
+    players="${players:-16}"
+
     if [ -z "$name" ] && [ -t 0 ]; then
         echo ""
         echo "${C_BOLD}--- New server ---${C_RESET}"
         read -r -p "Server name [Server $((next_idx + 1))]: " name
         name="${name:-Server $((next_idx + 1))}"
-        read -r -p "Max players [16]: " players
-        players="${players:-16}"
-        if ! [[ "$players" =~ ^[0-9]+$ ]]; then
-            warn "'${players}' isn't a number - using 16."
-            players=16
+        if [ -n "$template_name" ]; then
+            echo "Using template '${template_name}': ${players} players."
+        else
+            read -r -p "Max players [16]: " players
+            players="${players:-16}"
+            if ! [[ "$players" =~ ^[0-9]+$ ]]; then
+                warn "'${players}' isn't a number - using 16."
+                players=16
+            fi
+            read -r -p "Driver password (blank = none): " driver_pass
+            read -r -s -p "Admin password (blank = none): " admin_pass
+            echo ""
         fi
-        read -r -p "Driver password (blank = none): " driver_pass
-        read -r -s -p "Admin password (blank = none): " admin_pass
-        echo ""
     else
         name="${name:-Server $((next_idx + 1))}"
+    fi
+
+    if [ "$DRY_RUN" = "1" ]; then
+        echo ""
+        echo "[DRY RUN] Would add ${new_id} (\"${name}\") - port ${port}/${http} (tcp+udp/web), ${players} players"
+        echo "[DRY RUN] Would write data/store.json/servers/${new_id}/{serverOptions,perServerOptions,notifications}.json"
+        echo "[DRY RUN] Would copy game files from server_0 to data/server/_manager/servers/${new_id}"
+        echo "[DRY RUN] Would publish ${port}/${http} in docker-compose.yml"
+        return 0
     fi
 
     log "Adding ${new_id} (\"${name}\") on port ${port} (web: ${http})"
@@ -376,6 +455,12 @@ cmd_remove_server() {
 
     local name
     name=$(grep -oP '"server_name":"\K[^"]*' "data/store.json/servers/${id}/serverOptions.json" 2>/dev/null)
+
+    if [ "$DRY_RUN" = "1" ]; then
+        echo "[DRY RUN] Would remove ${id} (\"${name}\"): its store entry, game-file copy, and published ports."
+        return 0
+    fi
+
     if [ -t 0 ]; then
         local confirm
         read -r -p "Remove ${id} (\"${name}\") and all its data/results permanently? [y/N]: " confirm
@@ -431,6 +516,11 @@ cmd_set_port() {
     old_port=$(grep -oP '"server_tcp_listener_port":\K[0-9]+' "data/store.json/servers/${id}/serverOptions.json")
     old_http=$((old_port + 1))
     new_http=$((new_port + 1))
+
+    if [ "$DRY_RUN" = "1" ]; then
+        echo "[DRY RUN] Would move ${id} from ${old_port}/${old_http} to ${new_port}/${new_http}."
+        return 0
+    fi
 
     local opts="data/store.json/servers/${id}/serverOptions.json"
     sed -i \
@@ -1040,70 +1130,566 @@ cmd_rotate_secret() {
     success "New http.session_key generated. Restart to apply: docker compose up -d"
 }
 
+# ============================================================================
+# whitelist / blacklist - manage a server's entry_list.json steamid arrays.
+# Assumes the standard convention of plain SteamID64 strings in a flat JSON
+# array (or null when empty) - unverified against a populated real example,
+# since every server we inspected had these fields empty.
+# ============================================================================
+read_id_array() {
+    local file="$1" field="$2"
+    grep -oP "\"${field}\":\s*\[\K[^]]*" "$file" 2>/dev/null | grep -oP '[0-9]+' || true
+}
+
+write_id_array() {
+    local file="$1" field="$2"
+    shift 2
+    local -a ids=("$@")
+    local json_array
+    if [ "${#ids[@]}" -eq 0 ]; then
+        json_array="null"
+    else
+        json_array="["
+        local id first=1
+        for id in "${ids[@]}"; do
+            [ "$first" = 1 ] || json_array+=","
+            json_array+="\"${id}\""
+            first=0
+        done
+        json_array+="]"
+    fi
+    # "#" as delimiter - the pattern's own "|" alternation would otherwise
+    # collide with a "|" delimiter.
+    local escaped
+    escaped=$(printf '%s' "$json_array" | sed 's/[\&#]/\\&/g')
+    sed -i -E "s#\"${field}\":[[:space:]]*(null|\[[^]]*\])#\"${field}\": ${escaped}#" "$file"
+}
+
+_entry_list_cmd() {
+    local label="$1" field="$2"
+    shift 2
+    require_setup_done
+    local action="${1:-}" id="${2:-}" steamid="${3:-}"
+    if [ -z "$action" ] && [ -t 0 ]; then
+        read -r -p "Action (add/remove/list) [list]: " action
+    fi
+    action="${action:-list}"
+    if [ -z "$id" ] && [ -t 0 ]; then
+        echo "${C_BOLD}Existing servers:${C_RESET}"
+        list_servers
+        read -r -p "Server id: " id
+    fi
+    local file="data/server/_manager/servers/${id}/entry_list.json"
+    if [ -z "$id" ] || [ ! -f "$file" ]; then
+        error "No such server: '${id}'"
+        exit 1
+    fi
+
+    case "$action" in
+        list)
+            echo "${label} for ${id}:"
+            local found=0 sid
+            while IFS= read -r sid; do
+                [ -n "$sid" ] || continue
+                echo "  ${sid}"
+                found=1
+            done < <(read_id_array "$file" "$field")
+            [ "$found" = 0 ] && echo "  (empty)"
+            ;;
+        add)
+            if [ -z "$steamid" ] && [ -t 0 ]; then
+                read -r -p "SteamID64 to add: " steamid
+            fi
+            if ! [[ "$steamid" =~ ^[0-9]{17}$ ]]; then
+                error "'${steamid}' doesn't look like a SteamID64 (17 digits)."
+                exit 1
+            fi
+            local -a ids existing
+            mapfile -t ids < <(read_id_array "$file" "$field")
+            for existing in "${ids[@]+"${ids[@]}"}"; do
+                if [ "$existing" = "$steamid" ]; then
+                    warn "${steamid} is already in the ${label}."
+                    exit 0
+                fi
+            done
+            ids+=("$steamid")
+            write_id_array "$file" "$field" "${ids[@]}"
+            success "Added ${steamid} to ${id}'s ${label}. Restart to apply: docker compose up -d"
+            ;;
+        remove)
+            if [ -z "$steamid" ] && [ -t 0 ]; then
+                read -r -p "SteamID64 to remove: " steamid
+            fi
+            local -a ids new_ids=() existing
+            mapfile -t ids < <(read_id_array "$file" "$field")
+            for existing in "${ids[@]+"${ids[@]}"}"; do
+                [ "$existing" = "$steamid" ] || new_ids+=("$existing")
+            done
+            write_id_array "$file" "$field" "${new_ids[@]+"${new_ids[@]}"}"
+            success "Removed ${steamid} (if present) from ${id}'s ${label}. Restart to apply: docker compose up -d"
+            ;;
+        *)
+            error "Unknown action '${action}' - use add, remove, or list."
+            exit 1
+            ;;
+    esac
+}
+
+cmd_whitelist() { _entry_list_cmd "whitelist" "steamid_whitelist" "$@"; }
+cmd_blacklist() { _entry_list_cmd "blacklist" "steamid_blacklist" "$@"; }
+
+# ============================================================================
+# save-template / list-templates - snapshot a server's max players/passwords
+# as a reusable template; add-server --from-template <name> applies it.
+# ============================================================================
+cmd_save_template() {
+    require_setup_done
+    local id="${1:-}" template_name="${2:-}"
+    if [ -z "$id" ] && [ -t 0 ]; then
+        echo "${C_BOLD}Existing servers:${C_RESET}"
+        list_servers
+        read -r -p "Server id to save as a template: " id
+    fi
+    local opts="data/store.json/servers/${id}/serverOptions.json"
+    if [ -z "$id" ] || [ ! -f "$opts" ]; then
+        error "No such server: '${id}'"
+        exit 1
+    fi
+    if [ -z "$template_name" ] && [ -t 0 ]; then
+        read -r -p "Template name: " template_name
+    fi
+    if [ -z "$template_name" ]; then
+        error "A template name is required."
+        exit 1
+    fi
+
+    mkdir -p templates
+    local players driver_pass admin_pass
+    players=$(grep -oP '"max_players":\K[0-9]+' "$opts")
+    driver_pass=$(grep -oP '"driver_password":"\K[^"]*' "$opts")
+    admin_pass=$(grep -oP '"admin_password":"\K[^"]*' "$opts")
+    cat > "templates/${template_name}.json" <<JSON
+{"max_players":${players},"driver_password":"${driver_pass}","admin_password":"${admin_pass}"}
+JSON
+    success "Saved ${id}'s settings as template '${template_name}' (templates/${template_name}.json)."
+}
+
+cmd_list_templates() {
+    echo "${C_BOLD}Templates:${C_RESET}"
+    local found=0 f
+    shopt -s nullglob
+    for f in templates/*.json; do
+        found=1
+        echo "  $(basename "$f" .json): $(grep -oP '"max_players":\K[0-9]+' "$f" 2>/dev/null) players"
+    done
+    shopt -u nullglob
+    [ "$found" = 0 ] && echo "  (none yet - save one with: $0 save-template)"
+}
+
+# ============================================================================
+# change-admin-password - drives the manager's own login + change-password
+# web forms via curl, so the manager computes the password hash itself (we
+# never touch PasswordHash/PasswordSalt directly - their exact construction
+# is undocumented, and forging it wrong risks a locked-out admin account
+# with no easy recovery). BEST-EFFORT: field names were read from the
+# compiled binary, not confirmed against a live successful login, since
+# that would require real admin credentials this tool has no business
+# handling on your behalf beyond this one local request/response.
+# ============================================================================
+cmd_change_admin_password() {
+    require_setup_done
+    require_container_running
+
+    warn "This submits the manager's own web login/change-password forms locally"
+    echo "    (never sent anywhere but this container) - unvalidated against a live"
+    echo "    login, so double-check in the web UI afterward."
+    echo ""
+    local username current_pass new_pass new_pass2
+    read -r -p "Admin username [admin]: " username
+    username="${username:-admin}"
+    read -r -s -p "Current password: " current_pass
+    echo ""
+    read -r -s -p "New password: " new_pass
+    echo ""
+    read -r -s -p "Confirm new password: " new_pass2
+    echo ""
+    if [ "$new_pass" != "$new_pass2" ]; then
+        error "New passwords didn't match."
+        exit 1
+    fi
+
+    local jar
+    jar=$(mktemp)
+    trap 'rm -f "$jar"' RETURN
+
+    local login_resp
+    login_resp=$(curl -s -c "$jar" -b "$jar" \
+        --data-urlencode "Username=${username}" \
+        --data-urlencode "Password=${current_pass}" \
+        http://localhost:8773/login)
+    if echo "$login_resp" | grep -q 'id="Username"'; then
+        error "Login failed - check your current username/password."
+        exit 1
+    fi
+
+    local change_resp
+    change_resp=$(curl -s -c "$jar" -b "$jar" \
+        --data-urlencode "CurrentPassword=${current_pass}" \
+        --data-urlencode "NewPassword=${new_pass}" \
+        --data-urlencode "RepeatPassword=${new_pass}" \
+        http://localhost:8773/account/new-password)
+    if echo "$change_resp" | grep -qi 'error\|invalid\|incorrect'; then
+        error "The manager's response suggests this may have failed - verify in the web UI"
+        echo "before relying on the new password." >&2
+        exit 1
+    fi
+
+    success "Password change submitted for '${username}' - verify you can log in with it."
+}
+
+# ============================================================================
+# diff-config - real diff between the active release's default config.yml
+# and your data/config.yml (entrypoint.sh only lists new top-level keys;
+# this shows everything).
+# ============================================================================
+cmd_diff_config() {
+    require_setup_done
+    local version
+    version=$(grep '^ACEVO_VERSION=' .env 2>/dev/null | cut -d= -f2-)
+    if [ -z "$version" ]; then
+        error "ACEVO_VERSION not set in .env."
+        exit 1
+    fi
+
+    local default_cfg cleanup_tmp=0
+    if [ -f "releases/${version}/linux/config.yml" ]; then
+        default_cfg="releases/${version}/linux/config.yml"
+    else
+        local zip
+        zip=$(find "releases/${version}" -maxdepth 1 -iname "*.zip" 2>/dev/null | head -1)
+        if [ -z "$zip" ]; then
+            error "Couldn't find a config.yml or release zip under releases/${version}/."
+            exit 1
+        fi
+        default_cfg=$(mktemp)
+        cleanup_tmp=1
+        unzip -p "$zip" linux/config.yml > "$default_cfg"
+    fi
+
+    echo "${C_BOLD}Diff: releases/${version}'s default config.yml vs your data/config.yml${C_RESET}"
+    echo "(< = release default, > = yours)"
+    local diff_output
+    diff_output=$(diff "$default_cfg" data/config.yml || true)
+    if [ -z "$diff_output" ]; then
+        success "No differences - your config.yml already matches this release's defaults."
+    else
+        echo "$diff_output"
+    fi
+    [ "$cleanup_tmp" = "1" ] && rm -f "$default_cfg"
+}
+
+# ============================================================================
+# results - query the manager's results SQLite database directly.
+# ============================================================================
+cmd_results() {
+    require_setup_done
+    local db="data/store.json/databases/results.db"
+    if [ ! -f "$db" ]; then
+        error "No results database found at ${db} yet."
+        exit 1
+    fi
+    if ! command -v sqlite3 >/dev/null 2>&1; then
+        error "sqlite3 isn't installed on this host."
+        echo "Install it (e.g. 'apt-get install sqlite3') and try again, or open" >&2
+        echo "${db} with your own SQLite client." >&2
+        exit 1
+    fi
+    local query="${*:-.tables}"
+    sqlite3 -header -column "$db" "$query"
+}
+
+# ============================================================================
+# check-ports - print your public IP and every configured server port, plus
+# where to verify external reachability. Can't reliably test port
+# reachability itself from inside the script (needs an outside vantage
+# point) - points you at the canonical tool for that instead of scraping it.
+# ============================================================================
+cmd_check_ports() {
+    echo "${C_BOLD}Public IP and configured server ports${C_RESET}"
+    local ip
+    ip=$(curl -fsSL --max-time 5 https://ifconfig.me 2>/dev/null || echo "")
+    if [ -n "$ip" ]; then
+        echo "Public IP: ${ip}"
+    else
+        warn "Couldn't detect your public IP automatically - check https://whatismyip.com"
+    fi
+    echo ""
+    echo "Configured ports (each must be forwarded at your router to this host):"
+    if [ -f docker-compose.yml ]; then
+        grep -v '^\s*#' docker-compose.yml | grep -oP '(?<=- ")[0-9]+:[0-9]+/(tcp|udp)(?=")' \
+            | sort -t: -k1,1n | awk '!seen[$0]++' \
+            | while IFS= read -r p; do echo "  ${p}"; done
+    fi
+    echo ""
+    echo "Verify each port is actually reachable from outside (one at a time) at:"
+    echo "  https://canyouseeme.org"
+}
+
+# ============================================================================
+# generate-proxy-config - write a ready-to-use reverse-proxy config for
+# putting the web UI behind HTTPS on a real domain.
+# ============================================================================
+cmd_generate_proxy_config() {
+    local proxy="${1:-}" domain="${2:-}"
+    if [ -z "$proxy" ] && [ -t 0 ]; then
+        read -r -p "Proxy (caddy/nginx) [caddy]: " proxy
+    fi
+    proxy="${proxy:-caddy}"
+    if [ -z "$domain" ] && [ -t 0 ]; then
+        read -r -p "Domain name (e.g. racing.example.com): " domain
+    fi
+    if [ -z "$domain" ]; then
+        error "A domain name is required."
+        exit 1
+    fi
+
+    case "$proxy" in
+        caddy)
+            cat > Caddyfile <<EOF
+${domain} {
+    reverse_proxy localhost:8773
+}
+EOF
+            success "Wrote Caddyfile. Caddy handles TLS (Let's Encrypt) automatically:"
+            echo "  caddy run --config Caddyfile"
+            ;;
+        nginx)
+            cat > nginx-acsm-evo.conf <<EOF
+server {
+    listen 80;
+    server_name ${domain};
+    location / {
+        proxy_pass http://127.0.0.1:8773;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+EOF
+            success "Wrote nginx-acsm-evo.conf. Add it under /etc/nginx/sites-enabled/, then get a"
+            echo "certificate:"
+            echo "  certbot --nginx -d ${domain}"
+            ;;
+        *)
+            error "Unknown proxy type '${proxy}' - use 'caddy' or 'nginx'."
+            exit 1
+            ;;
+    esac
+}
+
+# ============================================================================
+# watch - tail logs looking for a crash-loop, alerting to a Discord-style
+# webhook ({"content": "..."}) if ALERT_WEBHOOK_URL is set in .env. Runs in
+# the foreground until interrupted (Ctrl-C) - not a background daemon.
+# ============================================================================
+cmd_watch() {
+    require_setup_done
+    require_container_running
+    local webhook
+    webhook=$(grep '^ALERT_WEBHOOK_URL=' .env 2>/dev/null | cut -d= -f2-)
+    log "Watching for crash loops (Ctrl-C to stop)..."
+    if [ -n "$webhook" ]; then
+        echo "Alerts will be posted to ALERT_WEBHOOK_URL."
+    else
+        warn "No ALERT_WEBHOOK_URL set in .env - alerts will just print here."
+    fi
+
+    docker compose logs -f --tail 0 acevo-server-manager | while IFS= read -r line; do
+        echo "$line"
+        if echo "$line" | grep -q "crash loop"; then
+            local msg="ACSM EVO: crash loop detected - ${line}"
+            warn "${msg}"
+            if [ -n "$webhook" ]; then
+                local escaped_msg
+                escaped_msg=$(json_escape "$msg")
+                curl -fsSL --max-time 5 -X POST -H "Content-Type: application/json" \
+                    -d "{\"content\":\"${escaped_msg}\"}" "$webhook" >/dev/null 2>&1 || true
+            fi
+        fi
+    done
+}
+
+# ============================================================================
+# completion - print a bash completion script. Use with:
+#   source <(./acsm-evo-control.sh completion)
+# ============================================================================
+cmd_completion() {
+    cat <<'EOF'
+_acsm_evo_control_complete() {
+    local cur commands
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    commands="install update-manager update-game add-server rename-server remove-server set-port whitelist blacklist save-template list-templates backup restore doctor change-admin-password rotate-secret diff-config results check-ports generate-proxy-config watch self-update logs status completion help"
+    COMPREPLY=($(compgen -W "${commands}" -- "${cur}"))
+}
+complete -F _acsm_evo_control_complete acsm-evo-control.sh
+complete -F _acsm_evo_control_complete ./acsm-evo-control.sh
+EOF
+}
+
 cmd_help() {
     cat <<EOF
-Usage: $0 <command> [args]
+Usage: $0 [--dry-run] [--host user@host] <command> [args]
 
-Commands:
+  --dry-run           Preview add-server/remove-server/set-port without writing anything
+  --host user@host    Run this exact command on a remote host over SSH instead
+
+Setup & updates:
   install                     First-time setup (standalone - fetches what it needs from GitHub)
   update-manager <zip> [ver]  Install a new manager release and restart (add --dev for local build)
   update-game                 Re-run steamcmd inside the running container to update game files
-  add-server ["Name"]         Register a new server with the manager and publish its ports
-  rename-server [id] [name]   Change an existing server's display name (e.g. server_0)
-  remove-server [id]          Permanently delete a server (not server_0) and its ports
-  set-port [id] [port]        Move a server to a different TCP+UDP port pair
-  backup                      Snapshot store.json/config/license/results/.env to backups/
-  restore [file]              Restore a backup made by 'backup' (backs up current state first)
-  doctor                      Sanity-check the deployment (image freshness, credentials, files)
   self-update                 Replace this script with the latest version from GitHub
-  logs                        Tail the running container's logs
-  rotate-secret               Generate a fresh http.session_key (logs out active admin sessions)
-  status                      Show current version, configured servers, and container state
-  help                        Show this message
+
+Servers:
+  add-server ["Name"]           Register a new server with the manager and publish its ports
+                                 (add --from-template <name> to apply a saved template)
+  rename-server [id] [name]     Change an existing server's display name (e.g. server_0)
+  remove-server [id]            Permanently delete a server (not server_0) and its ports
+  set-port [id] [port]          Move a server to a different TCP+UDP port pair
+  whitelist <add|remove|list> [id] [steamid]   Manage a server's SteamID64 whitelist
+  blacklist <add|remove|list> [id] [steamid]   Manage a server's SteamID64 blacklist
+  save-template [id] [name]     Save a server's players/passwords as a reusable template
+  list-templates                List saved templates
+
+Backup & recovery:
+  backup                      Snapshot store.json/config/license/results/.env to backups/
+  restore [file]               Restore a backup made by 'backup' (backs up current state first)
+  doctor                       Sanity-check the deployment (image freshness, credentials, files)
+
+Security:
+  change-admin-password        Change the manager admin password (best-effort, see docs)
+  rotate-secret                Generate a fresh http.session_key (logs out active admin sessions)
+  generate-proxy-config [caddy|nginx] [domain]   Write a reverse-proxy config for HTTPS
+
+Monitoring & diagnostics:
+  status                       Show current version, configured servers, and container state
+  logs                         Tail the running container's logs
+  watch                        Tail logs and alert on a crash loop (Ctrl-C to stop)
+  check-ports                  Print your public IP and configured ports, and how to verify them
+  results [SQL]                Query the results SQLite database (needs sqlite3 on this host)
+  diff-config                  Diff the active release's default config.yml against yours
+
+  completion                   Print a bash completion script (source <(\$0 completion))
+  help                         Show this message
 
 Run with no command for an interactive menu.
 EOF
 }
 
-cmd_menu() {
-    banner
-    echo "  ${C_BOLD} 1)${C_RESET} Install / first-time setup"
-    echo "  ${C_BOLD} 2)${C_RESET} Update manager release"
-    echo "  ${C_BOLD} 3)${C_RESET} Update game server files (steamcmd)"
-    echo "  ${C_BOLD} 4)${C_RESET} Add a server"
-    echo "  ${C_BOLD} 5)${C_RESET} Rename a server"
-    echo "  ${C_BOLD} 6)${C_RESET} Remove a server"
-    echo "  ${C_BOLD} 7)${C_RESET} Move a server's port"
-    echo "  ${C_BOLD} 8)${C_RESET} Backup"
-    echo "  ${C_BOLD} 9)${C_RESET} Restore"
-    echo "  ${C_BOLD}10)${C_RESET} Doctor (sanity check)"
-    echo "  ${C_BOLD}11)${C_RESET} Self-update"
-    echo "  ${C_BOLD}12)${C_RESET} Tail logs"
-    echo "  ${C_BOLD}13)${C_RESET} Rotate session secret"
-    echo "  ${C_BOLD}14)${C_RESET} Show status"
-    echo "  ${C_BOLD}15)${C_RESET} Exit"
+_menu_choose() {
+    # $1 = prompt, rest = "label:command" pairs. Echoes the chosen command
+    # name (or "" for back/invalid) so the caller can act on it.
+    local prompt="$1"
+    shift
+    local i=1 pair label cmd
+    local -a cmds=()
+    for pair in "$@"; do
+        label="${pair%%:*}"
+        cmd="${pair#*:}"
+        printf '  %s%2d)%s %s\n' "$C_BOLD" "$i" "$C_RESET" "$label"
+        cmds+=("$cmd")
+        i=$((i + 1))
+    done
+    echo "  ${C_BOLD} 0)${C_RESET} Back"
     echo ""
     local choice
-    read -r -p "Choice [1-15]: " choice
+    read -r -p "${prompt}: " choice
     echo ""
-    case "$choice" in
-        1) cmd_install ;;
-        2) cmd_update_manager ;;
-        3) cmd_update_game ;;
-        4) cmd_add_server ;;
-        5) cmd_rename_server ;;
-        6) cmd_remove_server ;;
-        7) cmd_set_port ;;
-        8) cmd_backup ;;
-        9) cmd_restore ;;
-        10) cmd_doctor ;;
-        11) cmd_self_update ;;
-        12) cmd_logs ;;
-        13) cmd_rotate_secret ;;
-        14) cmd_status ;;
-        15) exit 0 ;;
-        *) error "Unknown choice."; exit 1 ;;
-    esac
+    if [ "$choice" = "0" ] || [ -z "$choice" ]; then
+        return
+    fi
+    if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#cmds[@]}" ]; then
+        "${cmds[$((choice - 1))]}"
+    else
+        error "Unknown choice."
+    fi
+}
+
+_menu_setup() {
+    echo "${C_BOLD}--- Setup & Updates ---${C_RESET}"
+    _menu_choose "Choice" \
+        "Install / first-time setup:cmd_install" \
+        "Update manager release:cmd_update_manager" \
+        "Update game server files (steamcmd):cmd_update_game" \
+        "Self-update this script:cmd_self_update"
+}
+
+_menu_servers() {
+    echo "${C_BOLD}--- Servers ---${C_RESET}"
+    _menu_choose "Choice" \
+        "Add a server:cmd_add_server" \
+        "Rename a server:cmd_rename_server" \
+        "Remove a server:cmd_remove_server" \
+        "Move a server's port:cmd_set_port" \
+        "Manage whitelist:cmd_whitelist" \
+        "Manage blacklist:cmd_blacklist" \
+        "Save server as template:cmd_save_template" \
+        "List templates:cmd_list_templates"
+}
+
+_menu_backup() {
+    echo "${C_BOLD}--- Backup & Recovery ---${C_RESET}"
+    _menu_choose "Choice" \
+        "Backup:cmd_backup" \
+        "Restore:cmd_restore" \
+        "Doctor (sanity check):cmd_doctor"
+}
+
+_menu_security() {
+    echo "${C_BOLD}--- Security ---${C_RESET}"
+    _menu_choose "Choice" \
+        "Change admin password:cmd_change_admin_password" \
+        "Rotate session secret:cmd_rotate_secret" \
+        "Generate reverse-proxy config (HTTPS):cmd_generate_proxy_config"
+}
+
+_menu_monitoring() {
+    echo "${C_BOLD}--- Monitoring & Diagnostics ---${C_RESET}"
+    _menu_choose "Choice" \
+        "Show status:cmd_status" \
+        "Tail logs:cmd_logs" \
+        "Watch for crash loops:cmd_watch" \
+        "Check port reachability:cmd_check_ports" \
+        "Query results database:cmd_results" \
+        "Diff config against release default:cmd_diff_config"
+}
+
+cmd_menu() {
+    while true; do
+        banner
+        echo "  ${C_BOLD}1)${C_RESET} Setup & Updates"
+        echo "  ${C_BOLD}2)${C_RESET} Servers"
+        echo "  ${C_BOLD}3)${C_RESET} Backup & Recovery"
+        echo "  ${C_BOLD}4)${C_RESET} Security"
+        echo "  ${C_BOLD}5)${C_RESET} Monitoring & Diagnostics"
+        echo "  ${C_BOLD}6)${C_RESET} Help"
+        echo "  ${C_BOLD}7)${C_RESET} Exit"
+        echo ""
+        local choice
+        read -r -p "Choice [1-7]: " choice
+        echo ""
+        case "$choice" in
+            1) _menu_setup ;;
+            2) _menu_servers ;;
+            3) _menu_backup ;;
+            4) _menu_security ;;
+            5) _menu_monitoring ;;
+            6) cmd_help ;;
+            7) exit 0 ;;
+            *) error "Unknown choice." ;;
+        esac
+        echo ""
+    done
 }
 
 # ============================================================================
@@ -1113,17 +1699,28 @@ case "${1:-}" in
     install) shift; cmd_install "$@" ;;
     update-manager) shift; cmd_update_manager "$@" ;;
     update-game) shift; cmd_update_game "$@" ;;
+    self-update) shift; cmd_self_update "$@" ;;
     add-server) shift; cmd_add_server "$@" ;;
     rename-server) shift; cmd_rename_server "$@" ;;
     remove-server) shift; cmd_remove_server "$@" ;;
     set-port) shift; cmd_set_port "$@" ;;
+    whitelist) shift; cmd_whitelist "$@" ;;
+    blacklist) shift; cmd_blacklist "$@" ;;
+    save-template) shift; cmd_save_template "$@" ;;
+    list-templates) shift; cmd_list_templates "$@" ;;
     backup) shift; cmd_backup "$@" ;;
     restore) shift; cmd_restore "$@" ;;
     doctor) shift; cmd_doctor "$@" ;;
-    self-update) shift; cmd_self_update "$@" ;;
-    logs) shift; cmd_logs "$@" ;;
+    change-admin-password) shift; cmd_change_admin_password "$@" ;;
     rotate-secret) shift; cmd_rotate_secret "$@" ;;
+    generate-proxy-config) shift; cmd_generate_proxy_config "$@" ;;
     status) shift; cmd_status "$@" ;;
+    logs) shift; cmd_logs "$@" ;;
+    watch) shift; cmd_watch "$@" ;;
+    check-ports) shift; cmd_check_ports "$@" ;;
+    results) shift; cmd_results "$@" ;;
+    diff-config) shift; cmd_diff_config "$@" ;;
+    completion) shift; cmd_completion "$@" ;;
     help|-h|--help) cmd_help ;;
     "") cmd_menu ;;
     *)

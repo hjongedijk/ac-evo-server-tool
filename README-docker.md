@@ -58,7 +58,8 @@ acsm-evo/
 │   ├── server/                      <- steamcmd-downloaded game files + one
 │   │                                    working copy per server (server_0/, server_1/, ...)
 │   └── store.json/                  <- manager's own store; directory, not a file (see step 4)
-└── backups/                      <- created by `backup`; gitignored, local only
+├── backups/                      <- created by `backup`; gitignored, local only
+└── templates/                    <- created by `save-template`; gitignored, local only
 ```
 
 ## First-time setup
@@ -402,6 +403,128 @@ Shortcut for `docker compose logs -f acevo-server-manager`.
 
 Read-only summary: current `ACEVO_VERSION`/`IMAGE_TAG`, every configured
 server with its name and ports, and `docker compose ps` output.
+
+### Global flags
+
+```bash
+./acsm-evo-control.sh --dry-run add-server
+./acsm-evo-control.sh --host user@otherhost status
+```
+
+- **`--dry-run`** previews `add-server`/`remove-server`/`set-port` — prints
+  exactly what would be written/deleted without touching anything.
+- **`--host user@host`** re-runs this exact command over SSH instead —
+  assumes `acsm-evo-control.sh` already exists wherever that SSH session
+  lands (e.g. its home directory). Useful for managing more than one box
+  without logging into each separately.
+
+### Whitelist / blacklist
+
+```bash
+./acsm-evo-control.sh whitelist add [id] [steamid64]
+./acsm-evo-control.sh whitelist remove [id] [steamid64]
+./acsm-evo-control.sh whitelist list [id]
+./acsm-evo-control.sh blacklist add|remove|list ...   # same shape
+```
+
+Manages a server's `entry_list.json` SteamID64 arrays. Assumes the standard
+convention (plain ID strings in a flat JSON array, or `null` when empty) —
+every server we inspected had these fields empty, so this hasn't been
+verified against a populated real-world example. Restart to apply.
+
+### Templates
+
+```bash
+./acsm-evo-control.sh save-template [id] [template-name]
+./acsm-evo-control.sh list-templates
+./acsm-evo-control.sh add-server --from-template <template-name> ["Name"]
+```
+
+Saves a server's max players/passwords as a reusable template under
+`templates/` (gitignored, local only), so spinning up another server just
+like an existing one skips re-entering the same settings.
+
+### Change admin password
+
+```bash
+./acsm-evo-control.sh change-admin-password
+```
+
+Drives the manager's own login and change-password web forms locally, so
+the manager computes the password hash itself — this tool deliberately
+never touches `PasswordHash`/`PasswordSalt` directly, since their exact
+construction is undocumented and getting it wrong risks a locked-out admin
+account with no easy recovery. **Best-effort**: the form field names were
+read from the compiled binary, not confirmed against a live successful
+login — verify you can log in with the new password afterward.
+
+### Reverse proxy / HTTPS
+
+```bash
+./acsm-evo-control.sh generate-proxy-config [caddy|nginx] [domain]
+```
+
+Writes a ready-to-use `Caddyfile` or `nginx-acsm-evo.conf` for putting the
+web UI behind a real domain with HTTPS, instead of bare `:8773`.
+
+### Watching for crash loops
+
+```bash
+./acsm-evo-control.sh watch
+```
+
+Tails the container's logs in the foreground (Ctrl-C to stop) and alerts —
+printed here, and POSTed to `ALERT_WEBHOOK_URL` in `.env` if set (Discord-style
+payload: `{"content": "..."}`) — when a crash loop is detected.
+
+### Checking port reachability
+
+```bash
+./acsm-evo-control.sh check-ports
+```
+
+Prints your public IP and every port currently published in
+`docker-compose.yml`. Can't reliably test reachability *from outside* by
+itself (that needs a vantage point outside your network) — points you at
+[canyouseeme.org](https://canyouseeme.org) to verify each port yourself
+instead of scraping it automatically.
+
+### Querying results
+
+```bash
+./acsm-evo-control.sh results               # lists tables
+./acsm-evo-control.sh results "SELECT * FROM some_table LIMIT 5"
+```
+
+Runs SQL directly against the results SQLite database. Requires `sqlite3`
+on the host running this script (`apt-get install sqlite3` on Debian/Ubuntu)
+— not bundled, so this fails with clear instructions if it's missing rather
+than guessing at column names you haven't confirmed.
+
+### Diffing config against a release
+
+```bash
+./acsm-evo-control.sh diff-config
+```
+
+Full diff between the active release's default `config.yml` and yours (the
+entrypoint's own check on every start only lists *new key names*, not a
+full diff).
+
+### Heartbeat / monitoring integration
+
+Set `HEARTBEAT_URL` in `.env` to a Healthchecks.io or Uptime Kuma push URL
+and the container pings it (fire-and-forget, never blocks startup) every
+time it starts successfully.
+
+### Shell completion
+
+```bash
+source <(./acsm-evo-control.sh completion)
+```
+
+Tab-completes subcommands. Add that line to your shell profile to keep it
+across sessions.
 
 ## Cutting a GitHub release of this tooling
 

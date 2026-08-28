@@ -51,26 +51,26 @@ runtime from your own `releases/<version>/` folder, either as a raw zip
 ## Managing your deployment
 
 `acsm-evo-control.sh` is a single tool for everything after first-time setup
-too — run it with no arguments for an interactive menu, or use it directly:
+too — run it with no arguments for a categorized interactive menu (Setup &
+Updates, Servers, Backup & Recovery, Security, Monitoring & Diagnostics), or
+use any command directly, e.g.:
 
 ```bash
-./acsm-evo-control.sh add-server         # register a new server with the
-                                          # manager and publish its ports -
-                                          # no web UI needed
-./acsm-evo-control.sh rename-server      # change a server's display name
-./acsm-evo-control.sh remove-server      # delete a server and its ports
-./acsm-evo-control.sh set-port           # move a server to a different port
+./acsm-evo-control.sh add-server         # register a new server - no web UI needed
 ./acsm-evo-control.sh update-manager /path/to/acevo-server-manager_v1.6.4.zip
-./acsm-evo-control.sh update-game        # re-run steamcmd to update game files
 ./acsm-evo-control.sh backup             # snapshot manager state to backups/
-./acsm-evo-control.sh restore            # restore a backup
 ./acsm-evo-control.sh doctor             # sanity-check the deployment
-./acsm-evo-control.sh self-update        # update this script from GitHub
 ./acsm-evo-control.sh status             # show version, servers, container state
+./acsm-evo-control.sh help               # full command list
 ```
 
+It also covers server whitelists/blacklists, reusable server templates,
+admin password changes, reverse-proxy/HTTPS config generation, crash-loop
+alerting, port-reachability checks, results queries, config diffing, and
+`--dry-run`/`--host` flags for previewing changes or managing a remote box.
 No rebuild needed for any of these — see
-[README-docker.md](README-docker.md#managing-your-deployment) for details.
+[README-docker.md](README-docker.md#managing-your-deployment) for the full
+list and details.
 
 ## License note
 

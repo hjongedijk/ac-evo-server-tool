@@ -10,6 +10,16 @@ services:
     env_file:
       - path: ./.env
         required: false
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Uncomment and tune to your host's capacity if Wine + steamcmd need
+    # capping (plain compose "mem_limit"/"cpus", not the swarm-only "deploy:"
+    # block, which docker compose on a single host ignores):
+    # mem_limit: 4g
+    # cpus: 2.0
     ports:
       - "8773:8773"       # web UI
       # Must match each server's "Server Options" page in the web UI.

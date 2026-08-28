@@ -171,5 +171,11 @@ export XDG_RUNTIME_DIR=/tmp/xdg-runtime
 mkdir -p "${XDG_RUNTIME_DIR}"
 chmod 0700 "${XDG_RUNTIME_DIR}"
 
+# Optional dead-man's-switch ping (Healthchecks.io, Uptime Kuma push URL,
+# etc.) - fire-and-forget, never blocks or fails startup.
+if [ -n "${HEARTBEAT_URL}" ]; then
+    curl -fsS -m 5 "${HEARTBEAT_URL}" >/dev/null 2>&1 || true
+fi
+
 echo "Starting acevo-server-manager..."
 exec ./acevo-server-manager
